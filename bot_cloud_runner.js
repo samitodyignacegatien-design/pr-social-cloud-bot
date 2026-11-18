@@ -1,5 +1,7 @@
 /**
- * bot_cloud_runner.js — Robot Cloud PR.SOCIAL (Moteur identique à l'extension Edge + Logs Panneau Droit)
+ * bot_cloud_runner.js — Robot Cloud 24h/24 Eco-Quota (Sans sommeil nocturne)
+ * S'éteint immédiatement après 50 tâches ou sur pause PR.SOCIAL pour économiser le quota GitHub,
+ * puis le cron GitHub le rallume automatiquement une fois la pause terminée.
  */
 
 const fs = require('fs');
@@ -14,8 +16,7 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '315', 10);
-const STOP_HOUR_EVENING = parseInt(process.env.STOP_HOUR_EVENING || '22', 10);
+const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '40', 10);
 
 const FORBIDDEN_TASK_KEYWORDS = [
   'commentaire', 'commenter', 'comment', 'signaler', 'signalement',
@@ -47,11 +48,6 @@ async function moveMouseHumanLike(page, targetX, targetY) {
     await page.mouse.move(x, y);
     await sleep(randomBetween(6, 14));
   }
-}
-
-function isEveningStopTimeReached() {
-  const hour = new Date().getHours();
-  return hour >= STOP_HOUR_EVENING || hour < 5;
 }
 
 function loadBotState() {
@@ -97,7 +93,6 @@ async function ensureOnInstagramTasksTab(prPage) {
       }
     }
 
-    // Sélectionner le réseau "Instagram" dans la colonne Réseaux
     await prPage.evaluate(async () => {
       const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
       const simulateClick = (el) => {
@@ -190,7 +185,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return r.width > 4 && r.height > 4;
         };
 
-        // Le vrai simulateRealisticClick de notre extension Edge !
         const simulateRealisticClick = (el) => {
           if (!el) return false;
           const r = el.getBoundingClientRect();
@@ -241,6 +235,22 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return panels[0] ? panels[0].innerText || '' : '';
         };
 
+        const detectForcedPause = () => {
+          const raw = document.body?.innerText || '';
+          const txt = norm(raw);
+          const pauseWords = ['pause', 'limite atteinte', 'trop de taches', 'attendez', 'patienter', 'reessayez dans'];
+          if (!pauseWords.some((w) => txt.includes(w))) return null;
+
+          const minMatch = txt.match(/(\d{1,3})\s*(?:minute|minutes|min|mn)\b/i);
+          if (minMatch) {
+            const mins = parseInt(minMatch[1], 10);
+            if (mins >= 1 && mins <= 240) {
+              return { isPaused: true, reason: `Pause PR.SOCIAL détectée (${mins} min)` };
+            }
+          }
+          return null;
+        };
+
         const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
         const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
 
@@ -271,6 +281,9 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         };
 
         for (let cycle = 0; cycle < 6; cycle++) {
+          const pauseInfo = detectForcedPause();
+          if (pauseInfo) return { platformPaused: true, ...pauseInfo };
+
           const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
           if (openOtherBtn) {
             simulateRealisticClick(openOtherBtn);
@@ -329,6 +342,9 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             await sleepInPage(1100);
           }
 
+          const afterStartPause = detectForcedPause();
+          if (afterStartPause) return { platformPaused: true, ...afterStartPause };
+
           const postStartRaw = getRightPanelText(minRightX);
           const postStartNorm = norm(postStartRaw);
 
@@ -347,7 +363,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             continue;
           }
 
-          // Vérifier que la tâche est bien passée à l'état "En cours" (ou que "Annuler la tâche" est visible)
           const isTaskStarted =
             postStartNorm.includes('en cours') ||
             postStartNorm.includes('annuler la tache') ||
@@ -385,10 +400,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
   }
 }
 
-/**
- * Clic réel sur la boîte 1 ("Ouvrez le profil et suivez-le" / "www.instagr...")
- * en laissant le vrai événement se produire (et en fermant tout onglet popup secondaire)
- */
 async function clickStep1OpenProfileBox(context, prPage) {
   let popupOpened = null;
   const onNewPage = (p) => { popupOpened = p; };
@@ -407,7 +418,7 @@ async function clickStep1OpenProfileBox(context, prPage) {
         els.find((el) => norm(el.innerText || '').includes('ouvrez le profil et suivez-le'));
       if (!target) return null;
       const r = target.getBoundingClientRect();
-      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: (target.innerText || '').trim() };
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     });
 
     if (coords) {
@@ -422,42 +433,20 @@ async function clickStep1OpenProfileBox(context, prPage) {
   }
 }
 
-/**
- * Envoi de la capture sur le bouton 2 ("Ajouter une capture d'écran") :
- * 1. Affiche le diagnostic du panneau droit avant l'upload
- * 2. Intercepte `filechooser` dès le PREMIER vrai clic souris sur "Ajouter une capture d'écran"
- * 3. Injecte aussi via DataTransfer + HTMLInputElement.prototype.files (exactement comme l'extension Edge)
- * 4. Clique sur tout bouton de validation éventuel et affiche le diagnostic après l'upload
- */
 async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
   await prPage.bringToFront().catch(() => {});
   await sleep(400);
 
-  // Diagnostic AVANT upload
-  const preDiag = await prPage.evaluate(() => {
-    const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
-    const inputs = Array.from(document.querySelectorAll('input[type="file"]')).length;
-    const btns = Array.from(document.querySelectorAll('button, label, a, [role="button"]'))
-      .filter((el) => el.getBoundingClientRect().left >= minRightX)
-      .map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim())
-      .filter(Boolean);
-    return { inputs, btns: btns.slice(0, 8) };
-  });
-  console.log(`📋 Panneau droit avant upload -> inputs=${preDiag.inputs} | boutons=${JSON.stringify(preDiag.btns)}`);
-
   let fileUploadedViaChooser = false;
 
-  // Étape 1 : Si un <input type="file"> existe déjà dans le DOM, lui passer le fichier directement
   const directInputs = await prPage.$$('input[type="file"]');
   if (directInputs.length > 0) {
     for (const inp of directInputs) {
       await inp.setInputFiles(tempProofPath).catch(() => {});
     }
     fileUploadedViaChooser = true;
-    console.log(`📎 Fichier injecté dans ${directInputs.length} <input type="file"> existant(s)`);
   }
 
-  // Étape 2 : Trouver les coordonnées exactes du bouton "Ajouter une capture d'écran" et cliquer dessus en écoutant filechooser
   const uploadBtnCoords = await prPage.evaluate(() => {
     const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
     const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
@@ -476,7 +465,7 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
     const best = candidates[0];
     if (!best) return null;
     const r = best.getBoundingClientRect();
-    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), tag: best.tagName, text: (best.innerText || '').trim() };
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
   });
 
   if (uploadBtnCoords && !fileUploadedViaChooser) {
@@ -487,21 +476,17 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
       ]);
       await fileChooser.setFiles(tempProofPath);
       fileUploadedViaChooser = true;
-      console.log(`📎 Fichier injecté via FileChooser natif après clic sur <${uploadBtnCoords.tag}> "${uploadBtnCoords.text}"`);
     } catch (_) {
-      // Vérifier si le clic a fait apparaître un <input type="file"> dans le DOM
       const newInputs = await prPage.$$('input[type="file"]');
       if (newInputs.length > 0) {
         for (const inp of newInputs) {
           await inp.setInputFiles(tempProofPath).catch(() => {});
         }
         fileUploadedViaChooser = true;
-        console.log(`📎 Fichier injecté dans <input type="file"> apparu après clic`);
       }
     }
   }
 
-  // Étape 3 : Exécuter AUSSI l'injection DataTransfer + Drag & Drop exacte de content_platform.js (notre extension Edge)
   const base64DataUrl = `data:image/png;base64,${screenshotBuffer.toString('base64')}`;
   await prPage.evaluate(async (dataUrl) => {
     const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
@@ -552,7 +537,6 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
     }
   }, base64DataUrl);
 
-  // Étape 4 : Attendre la confirmation (et cliquer sur tout bouton Envoyer/Valider s'il apparaît)
   const verifyResult = await prPage.evaluate(async () => {
     const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
     const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
@@ -571,16 +555,13 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
 
     const start = Date.now();
     while (Date.now() - start < 9000) {
-      // S'il y a un bouton "Envoyer" / "Valider" / "Soumettre" / "Vérifier", cliquer dessus
       const submitBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => {
         const r = el.getBoundingClientRect();
         if (r.left < minRightX || r.width < 20) return false;
         const t = norm(el.innerText || '');
         return ['envoyer', 'valider', 'soumettre', 'confirmer', 'verifier'].some((w) => t === w || t.startsWith(w));
       });
-      if (submitBtn) {
-        simulateRealisticClick(submitBtn);
-      }
+      if (submitBtn) simulateRealisticClick(submitBtn);
 
       const txt = norm(document.body?.innerText || '');
       const hasSent =
@@ -602,31 +583,20 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
       await sleepInPage(200);
     }
 
-    const panels = Array.from(document.querySelectorAll('div, aside, section')).filter((el) => {
-      const r = el.getBoundingClientRect();
-      return r.left >= minRightX && r.width > 200 && r.height > 200;
-    });
-    panels.sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height);
-    const afterText = (panels[0]?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-
-    return { verified: false, afterText };
+    return { verified: false };
   });
-
-  if (!verifyResult.verified) {
-    console.log(`📋 Panneau droit APRÈS upload : "${verifyResult.afterText}"`);
-  }
 
   return {
     verified: verifyResult.verified,
-    reason: verifyResult.verified ? 'OK' : `Non confirmé (Texte panneau droit: ${verifyResult.afterText})`
+    reason: verifyResult.verified ? 'OK' : 'Confirmation non détectée'
   };
 }
 
 async function main() {
   console.log('================================================================');
-  console.log('🚀 Démarrage du Bot Cloud PR.SOCIAL (Mono-Compte @samitodyignacegatien)');
-  console.log('🎯 Mode : UNIQUEMENT Abonnements sur Instagram (Tous revenus)');
-  console.log('🛡️ Bouclier Anti-Ban + Pause auto 50 tâches (20+ min) activés');
+  console.log('🚀 Bot Cloud PR.SOCIAL 24h/24 (Mode Éco-Quota sans sommeil)');
+  console.log('🎯 Compte @samitodyignacegatien | Abonnements IG uniquement');
+  console.log('⏸️ Arrêt automatique dès la pause de 50 tâches (reprise par cron)');
   console.log('================================================================');
 
   const startTime = Date.now();
@@ -658,12 +628,7 @@ async function main() {
 
   while (true) {
     if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
-      console.log('⏱️ Fin du relais Cloud. Sauvegarde de l’état.');
-      break;
-    }
-
-    if (isEveningStopTimeReached()) {
-      console.log('🌙 22h00 atteint : arrêt nocturne automatique anti-ban.');
+      console.log('⏱️ Fin de session (40 min). Arrêt propre pour économiser le quota.');
       break;
     }
 
@@ -671,24 +636,20 @@ async function main() {
 
     if (taskResult?.retry) continue;
 
+    // ÉCONOMIE DE QUOTA : Si PR.SOCIAL impose la pause, on éteint immédiatement le bot !
     if (taskResult?.platformPaused) {
-      const waitSec = taskResult.waitSeconds || 21 * 60;
-      console.log(`⏸️ ${taskResult.reason} -> Attente automatique de ${Math.ceil(waitSec / 60)} min...`);
-      await sleep(waitSec * 1000);
-      await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-      await sleep(2500);
-      continue;
+      console.log(`⏸️ ${taskResult.reason} -> Extinction immédiate pour économiser le quota GitHub. Le cron rallumera le bot automatiquement !`);
+      break;
     }
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
       emptyRetries += 1;
-      console.log(`🔍 Aucune tâche (${emptyRetries}/3) | Panneau: ${taskResult?.preview || 'vide'}`);
+      console.log(`🔍 Aucune tâche (${emptyRetries}/3)`);
       await prPage.mouse.wheel(0, 500);
-      await sleep(5000);
+      await sleep(4000);
       if (emptyRetries >= 3) {
-        emptyRetries = 0;
-        await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        await sleep(2500);
+        console.log('🛑 Liste vide après 3 essais -> Extinction pour économiser le quota jusqu’au prochain réveil.');
+        break;
       }
       continue;
     }
@@ -759,16 +720,14 @@ async function main() {
       });
 
       if (igOutcome.status === 'IG_RATE_LIMIT') {
-        console.log('🛡️ BOUCLIER ANTI-BAN : Pause sécurité de 60 min.');
+        console.log('🛡️ BOUCLIER ANTI-BAN : Instagram demande de ralentir -> Extinction immédiate jusqu’au prochain réveil.');
         await igPage.close();
-        await sleep(60 * 60 * 1000);
-        continue;
+        break;
       }
 
       if (igOutcome.status === 'FOLLOWED' || igOutcome.status === 'ALREADY_FOLLOWING') {
         screenshotBuffer = await igPage.screenshot({ type: 'png', fullPage: false });
         followSuccess = true;
-        console.log(`📸 Capture Instagram prête (${igOutcome.status}) pour @${taskResult.username}`);
       }
     } catch (err) {
       console.log(`⚠️ Erreur Instagram (@${taskResult.username}) : ${err.message}`);
@@ -777,16 +736,14 @@ async function main() {
     }
 
     if (!followSuccess || !screenshotBuffer) {
-      console.log(`🔄 Profil indisponible -> annulation propre de @${taskResult.username}`);
       await cancelActiveTaskOnPrSocial(prPage);
       state.failedCount = (state.failedCount || 0) + 1;
       state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
       saveBotState(state);
-      await sleep(randomBetween(2500, 4500));
+      await sleep(randomBetween(2000, 3500));
       continue;
     }
 
-    console.log(`📤 Envoi de la capture sur PR.SOCIAL pour @${taskResult.username}...`);
     const tempProof = path.join(DATA_DIR, `proof_${Date.now()}.png`);
     fs.writeFileSync(tempProof, screenshotBuffer);
 
@@ -805,28 +762,26 @@ async function main() {
 
       console.log(`✅ Tâche #${state.completedCount} validée (@${taskResult.username}) | Cycle : ${state.cycleCount % 50}/50`);
 
+      // ÉCONOMIE DE QUOTA : À 50 tâches, on s'éteint tout de suite au lieu de dormir 21 min sur GitHub !
       if (state.cycleCount > 0 && state.cycleCount % 50 === 0) {
-        console.log('⏸️ 50 tâches réalisées ! Pause automatique de 21 minutes avant reprise autonome...');
-        await sleep(21 * 60 * 1000);
-        await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        await sleep(2500);
-        continue;
+        console.log('⏸️ 50 tâches réalisées ! Extinction du bot pendant la pause PR.SOCIAL (le cron le rallumera tout seul).');
+        break;
       }
 
       if (state.cycleCount > 0 && state.cycleCount % 12 === 0) {
-        const breatherSec = randomBetween(25, 45);
+        const breatherSec = randomBetween(22, 38);
         console.log(`☕ Micro-pause humaine anti-ban (${breatherSec}s)...`);
         await sleep(breatherSec * 1000);
       } else {
-        await sleep(randomBetween(5000, 11000));
+        await sleep(randomBetween(4000, 9000));
       }
     } else {
-      console.log(`❌ Échec envoi capture (@${taskResult.username}) : ${uploadOutcome.reason}`);
+      console.log(`❌ Échec envoi (@${taskResult.username}). Annulation et passage à la suivante.`);
       await cancelActiveTaskOnPrSocial(prPage);
       state.failedCount = (state.failedCount || 0) + 1;
       state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
       saveBotState(state);
-      await sleep(3000);
+      await sleep(2500);
     }
   }
 
