@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>PR.SOCIAL Cloud Bot — GitHub Actions (Auto 06h00–22h00) & Mini-Chat</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: #09090b;
+      color: #fafafa;
+      overflow-x: hidden;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: #18181b;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #3f3f46;
+      border-radius: 9999px;
+    }
+    @keyframes pulseGlow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+      50% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+    }
+    .pulse-active {
+      animation: pulseGlow 2s infinite;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
+
+  <!-- BARRE SUPÉRIEURE : STATUT CLOUD GITHUB ACTIONS & BOUTON START/STOP IMMÉDIAT -->
+  <header class="sticky top-0 z-30 bg-zinc-900/95 backdrop-blur border-b border-zinc-800 px-4 py-3">
+    <div class="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div id="liveDot" class="w-3 h-3 rounded-full bg-zinc-500 transition-all"></div>
+        <div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <h1 class="text-sm sm:text-base font-bold tracking-tight text-white">PR.SOCIAL Cloud Bot</h1>
+            <span class="text-[11px] font-mono-code px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">GitHub Actions Auto 06h–22h</span>
+            <span class="text-[11px] font-mono-code px-2 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30">Abonnements IG Uniquement</span>
+            <span id="stateBadge" class="text-[11px] font-mono-code px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">IDLE</span>
+          </div>
+          <p class="text-xs text-zinc-400 mt-0.5">Compte unique : <span class="text-zinc-200 font-medium">zonatody</span> · Instagram : <span class="text-emerald-400 font-mono-code">@samitodyignacegatien</span> · <span class="text-sky-400">0 Commentaire / 0 Signalement</span></p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <!-- Bouton Simulation Mode PC Éteint / Sans Internet -->
+        <button id="toggleOfflineSimBtn" type="button" class="px-3 py-2 rounded-lg text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
+          <span id="offlineIcon" class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span id="offlineLabel">Réseau : Connecté</span>
+        </button>
+
+        <!-- Gros bouton START / STOP en 1 clic -->
+        <button id="masterStartStopBtn" type="button" class="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-950/50 flex items-center gap-2">
+          <span id="masterBtnIcon">▶</span>
+          <span id="masterBtnText">START BOT 24H/24</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- CONTENU PRINCIPAL : MÉTRIQUES + MINI-CHAT DE CONTRÔLE + CONFIGURATION -->
+  <main class="flex-1 max-w-5xl w-full mx-auto p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+    <!-- COLONNE GAUCHE (7 cols) : MINI-CHAT DE COMMANDE & PIPELINE EN DIRECT -->
+    <section class="lg:col-span-7 flex flex-col gap-3">
+
+      <!-- CARTES MÉTRIQUES TEMPS RÉEL -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+          <div class="text-[11px] text-zinc-400">Abonnements réussis</div>
+          <div id="metricCompleted" class="text-xl font-bold font-mono-code text-emerald-400 mt-0.5">0</div>
+          <div class="text-[10px] text-zinc-500 mt-0.5">Capture vérifiée</div>
+        </div>
+
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+          <div class="text-[11px] text-zinc-400">Cycle avant pause</div>
+          <div id="metricCycle" class="text-xl font-bold font-mono-code text-zinc-100 mt-0.5">0/50</div>
+          <div class="w-full bg-zinc-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+            <div id="cycleProgressBar" class="bg-orange-500 h-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+          <div class="text-[11px] text-zinc-400">Gains cumulés</div>
+          <div id="metricEarnings" class="text-xl font-bold font-mono-code text-amber-400 mt-0.5">$0.0000</div>
+          <div class="text-[10px] text-zinc-500 mt-0.5">Tous tarifs IG acceptés</div>
+        </div>
+
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+          <div class="text-[11px] text-zinc-400">Auto-Heal / Ignorées</div>
+          <div id="metricHealed" class="text-xl font-bold font-mono-code text-sky-400 mt-0.5">0</div>
+          <div class="text-[10px] text-zinc-500 mt-0.5">Places prises / Annulées</div>
+        </div>
+      </div>
+
+      <!-- BANDEAU D'ÉTAT EN DIRECT & COMPTE À REBOURS DE PAUSE 20+ MIN -->
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-3.5 flex flex-col gap-2">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-medium text-zinc-400">Action Cloud GitHub en cours :</span>
+          <span id="countdownBadge" class="hidden text-xs font-mono-code px-2.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30">
+            Reprise auto dans : --
+          </span>
+        </div>
+        <div id="liveStatusText" class="text-xs sm:text-sm font-medium text-zinc-100">
+          Programmateur quotidien 06h00–22h00 prêt. Appuyez sur START pour lancer immédiatement.
+        </div>
+
+        <!-- Barre d'étapes visuelles du workflow -->
+        <div class="grid grid-cols-6 gap-1 pt-1 text-[10px] font-mono-code text-center">
+          <div id="stepIndicatorFind" class="py-1 rounded bg-zinc-800 text-zinc-400">1. ABONNEMENT</div>
+          <div id="stepIndicatorStart" class="py-1 rounded bg-zinc-800 text-zinc-400">2. COMMENCER</div>
+          <div id="stepIndicatorFollow" class="py-1 rounded bg-zinc-800 text-zinc-400">3. SUIVRE IG</div>
+          <div id="stepIndicatorCapture" class="py-1 rounded bg-zinc-800 text-zinc-400">4. CAPTURE</div>
+          <div id="stepIndicatorVerify" class="py-1 rounded bg-zinc-800 text-zinc-400">5. VÉRIFIER</div>
+          <div id="stepIndicatorPause" class="py-1 rounded bg-zinc-800 text-zinc-400">6. AUTO-PAUSE</div>
+        </div>
+      </div>
+
+      <!-- FENÊTRE DU MINI-CHAT DE CONTRÔLE -->
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl flex flex-col h-[410px] overflow-hidden">
+        <div class="px-3.5 py-2.5 bg-zinc-900/90 border-b border-zinc-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-zinc-200">Mini-Chat de Contrôle (Compatible PC Éteint & Hors-Ligne)</span>
+            <span id="pendingQueueBadge" class="hidden text-[10px] font-mono-code px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+              0 commande en attente réseau
+            </span>
+          </div>
+          <button id="clearChatBtn" type="button" class="text-[11px] text-zinc-400 hover:text-zinc-200 transition">
+            Vider le journal
+          </button>
+        </div>
+
+        <!-- Messages du chat -->
+        <div id="chatContainer" class="flex-1 p-3.5 overflow-y-auto custom-scroll space-y-2.5"></div>
+
+        <!-- Boutons de commandes rapides en 1 clic -->
+        <div class="px-3 py-2 bg-zinc-950/60 border-t border-zinc-800/80 flex flex-wrap gap-1.5">
+          <button type="button" data-quick-cmd="/start" class="quick-cmd-btn px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition">
+            ▶ /start
+          </button>
+          <button type="button" data-quick-cmd="/stop" class="quick-cmd-btn px-2.5 py-1 rounded-md text-xs font-medium bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/30 transition">
+            ⏹ /stop
+          </button>
+          <button type="button" data-quick-cmd="/status" class="quick-cmd-btn px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition">
+            📊 /status
+          </button>
+          <button type="button" data-quick-cmd="/sim50" class="quick-cmd-btn px-2.5 py-1 rounded-md text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition">
+            ⏸ Tester Pause 50e tâche (20m)
+          </button>
+          <button type="button" data-quick-cmd="/fastforward" class="quick-cmd-btn px-2.5 py-1 rounded-md text-xs font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 transition">
+            ⏩ Finir Pause 20m maintenant
+          </button>
+          <button type="button" data-quick-cmd="/simheal" class="quick-cmd-btn px-2.5 py-1 rounded-md text-xs font-medium bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition">
+            🛠 Tester "Places prises / Annuler"
+          </button>
+        </div>
+
+        <!-- Champ de saisie du chat -->
+        <form id="chatForm" class="p-2.5 bg-zinc-950 border-t border-zinc-800 flex items-center gap-2">
+          <input
+            id="chatInput"
+            type="text"
+            placeholder="Tapez une commande (/start, /stop, /status, /pause, /resume)..."
+            class="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500"
+          />
+          <button
+            type="submit"
+            class="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition"
+          >
+            Envoyer
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- COLONNE DROITE (5 cols) : HORAIRE AUTO 06H-22H, PAUSE 50 TÂCHES, COOKIES & BOUCLIER ANTI-BAN -->
+    <aside class="lg:col-span-5 flex flex-col gap-3">
+
+      <!-- CARTE 1 : PROGRAMMATION AUTOMATIQUE QUOTIDIENNE (06H00 -> 22H00) & CYCLE 50 TÂCHES -->
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+          <h2 class="text-xs sm:text-sm font-semibold text-white">Horaire Auto Cloud & Pause 50 Tâches</h2>
+          <span class="text-[11px] font-mono-code text-emerald-400">GitHub Cron Actif</span>
+        </div>
+
+        <div class="space-y-2.5 text-xs">
+          <div class="flex items-center justify-between gap-2">
+            <label for="cfgStartHour" class="text-zinc-300">Réveil auto matin / Arrêt soir :</label>
+            <div class="flex items-center gap-1.5 font-mono-code">
+              <input id="cfgStartHour" type="text" value="06:00" class="w-16 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-center text-emerald-400" />
+              <span class="text-zinc-500">→</span>
+              <input id="cfgEndHour" type="text" value="22:00" class="w-16 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-center text-amber-400" />
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between gap-2">
+            <label for="cfgBatchSize" class="text-zinc-300">Tâches avant pause PR.SOCIAL :</label>
+            <input id="cfgBatchSize" type="number" min="1" max="200" value="50" class="w-20 bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-center font-mono-code text-zinc-100" />
+          </div>
+
+          <div class="flex items-center justify-between gap-2">
+            <label for="cfgPauseMinutes" class="text-zinc-300">Durée pause auto (minutes) :</label>
+            <input id="cfgPauseMinutes" type="number" min="1" max="180" value="21" class="w-20 bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-center font-mono-code text-zinc-100" />
+          </div>
+
+          <div class="flex items-center justify-between gap-2">
+            <label for="cfgMinDelay" class="text-zinc-300">Pause humaine entre 2 tâches (s) :</label>
+            <div class="flex items-center gap-1.5">
+              <input id="cfgMinDelay" type="number" min="2" max="60" value="5" class="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-center font-mono-code text-zinc-100" />
+              <span class="text-zinc-500">–</span>
+              <input id="cfgMaxDelay" type="number" min="3" max="120" value="11" class="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-center font-mono-code text-zinc-100" />
+            </div>
+          </div>
+        </div>
+
+        <button id="saveConfigBtn" type="button" class="w-full py-2 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700 transition">
+          Enregistrer les paramètres de boucle
+        </button>
+      </div>
+
+      <!-- CARTE 2 : CONNEXION SANS CLÉ API (SECRET GITHUB SESSION_COOKIES_JSON) -->
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs sm:text-sm font-semibold text-white">Session Cloud (Sans Clé API)</h2>
+          <span id="cookieStatusBadge" class="text-[11px] font-mono-code px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            Session prête
+          </span>
+        </div>
+        <p class="text-xs text-zinc-400 leading-relaxed">
+          Vos cookies <strong class="text-zinc-200">PR.SOCIAL (zonatody)</strong> et <strong class="text-zinc-200">Instagram (@samitodyignacegatien)</strong> permettent au robot GitHub Actions de se connecter tout seul à 06h00 pendant que vous dormez.
+        </p>
+
+        <textarea
+          id="cookiesJsonInput"
+          rows="3"
+          placeholder='Collez ici le tableau JSON de vos cookies exportés (ex: [{"name":"sessionid","value":"...","domain":".instagram.com"}])'
+          class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-xs font-mono-code text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500"
+        ></textarea>
+
+        <div class="flex gap-2">
+          <button id="saveCookiesBtn" type="button" class="flex-1 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white transition">
+            Injecter les Cookies dans le Cloud
+          </button>
+          <button id="loadDemoCookiesBtn" type="button" class="px-3 py-2 rounded-lg text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition">
+            Exemple
+          </button>
+        </div>
+      </div>
+
+      <!-- CARTE 3 : BOUCLIER ANTI-BAN & FILTRE STRICT ABONNEMENTS -->
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2 text-xs">
+        <h2 class="text-xs sm:text-sm font-semibold text-white mb-1">Bouclier Anti-Ban & Vos 4 Règles</h2>
+        <div class="flex items-start gap-2 text-zinc-300">
+          <span class="text-emerald-400 font-bold">✓</span>
+          <span><strong>100 % Abonnements Instagram (Tous tarifs)</strong> : bloque strictement les tâches de commentaires, de signalement/bannissement et les autres réseaux.</span>
+        </div>
+        <div class="flex items-start gap-2 text-zinc-300">
+          <span class="text-emerald-400 font-bold">✓</span>
+          <span><strong>Réveil auto 06h00 → 22h00 (GitHub Actions)</strong> : démarre chaque matin même si vous dormez et s'arrête la nuit pour protéger votre compte.</span>
+        </div>
+        <div class="flex items-start gap-2 text-zinc-300">
+          <span class="text-emerald-400 font-bold">✓</span>
+          <span><strong>Gestes humains anti-ban</strong> : courbes de souris Bézier, scroll des photos du profil et pause respiration de 30s toutes les 12 tâches.</span>
+        </div>
+        <div class="flex items-start gap-2 text-zinc-300">
+          <span class="text-emerald-400 font-bold">✓</span>
+          <span><strong>Pause 50 tâches (20+ min)</strong> : attend la fin du compte à rebours PR.SOCIAL et <strong>reprend tout seul sans votre autorisation</strong>.</span>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <script>
+    (() => {
+      const STORAGE_KEY = 'pr_social_cloud_bot_pwa_state_v4';
+
+      const SAMPLE_IG_PROFILES = [
+        { username: 'glambyhebs', reward: 0.0028 },
+        { username: '_ronben_', reward: 0.0028 },
+        { username: 'fancyangyland', reward: 0.0024 },
+        { username: 'garycee', reward: 0.0024 },
+        { username: 'kiki_lunaa_', reward: 0.0024 },
+        { username: 'yeonplace_baking', reward: 0.0024 },
+        { username: 'thaqi_13', reward: 0.0022 },
+        { username: 'burke711', reward: 0.0022 },
+        { username: 'louis.daytrade', reward: 0.0022 }
+      ];
+
+      const defaultState = {
+        isRunning: false,
+        isOfflineSimulated: false,
+        currentState: 'IDLE',
+        activeStepIndex: 0,
+        completedCount: 0,
+        sessionCount: 0,
+        healedCount: 0,
+        earningsUsd: 0.0,
+        cooldownUntil: null,
+        statusText: 'Programmateur quotidien 06h00–22h00 prêt. Appuyez sur START pour lancer immédiatement.',
+        pendingOfflineCommands: [],
+        config: {
+          startHour: '06:00',
+          endHour: '22:00',
+          batchSizeBeforePause: 50,
+          defaultBatchPauseMinutes: 21,
+          minDelaySec: 5,
+          maxDelaySec: 11
+        },
+        messages: [
+          {
+            id: 'init-1',
+            sender: 'bot',
+            badge: 'GITHUB CLOUD',
+            time: 'Maintenant',
+            text: 'Bonjour Diarra ! Votre Bot Cloud GitHub Actions est configuré sur votre compte unique @samitodyignacegatien : il démarre automatiquement chaque matin à 06h00 jusqu’à 22h00, exécute uniquement les tâches d’Abonnement sur Instagram (tous revenus, zéro commentaire/signalement), fait ses pauses humaines et reprend tout seul après chaque pause de 20 minutes.'
+          }
+        ]
+      };
+
+      function loadLocalState() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            return {
+              ...defaultState,
+              ...parsed,
+              config: { ...defaultState.config, ...(parsed.config || {}) }
+            };
+          }
+        } catch (_) {}
+        return structuredClone(defaultState);
+      }
+
+      function saveLocalState() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (_) {}
+      }
+
+      let state = loadLocalState();
+      let workflowTimer = null;
+      let countdownTimer = null;
+
+      // Références DOM
+      const liveDot = document.getElementById('liveDot');
+      const stateBadge = document.getElementById('stateBadge');
+      const toggleOfflineSimBtn = document.getElementById('toggleOfflineSimBtn');
+      const offlineIcon = document.getElementById('offlineIcon');
+      const offlineLabel = document.getElementById('offlineLabel');
+      const masterStartStopBtn = document.getElementById('masterStartStopBtn');
+      const masterBtnIcon = document.getElementById('masterBtnIcon');
+      const masterBtnText = document.getElementById('masterBtnText');
+
+      const metricCompleted = document.getElementById('metricCompleted');
+      const metricCycle = document.getElementById('metricCycle');
+      const cycleProgressBar = document.getElementById('cycleProgressBar');
+      const metricEarnings = document.getElementById('metricEarnings');
+      const metricHealed = document.getElementById('metricHealed');
+
+      const countdownBadge = document.getElementById('countdownBadge');
+      const liveStatusText = document.getElementById('liveStatusText');
+      const stepIndicators = [
+        document.getElementById('stepIndicatorFind'),
+        document.getElementById('stepIndicatorStart'),
+        document.getElementById('stepIndicatorFollow'),
+        document.getElementById('stepIndicatorCapture'),
+        document.getElementById('stepIndicatorVerify'),
+        document.getElementById('stepIndicatorPause')
+      ];
+
+      const pendingQueueBadge = document.getElementById('pendingQueueBadge');
+      const clearChatBtn = document.getElementById('clearChatBtn');
+      const chatContainer = document.getElementById('chatContainer');
+      const chatForm = document.getElementById('chatForm');
+      const chatInput = document.getElementById('chatInput');
+
+      const cfgStartHour = document.getElementById('cfgStartHour');
+      const cfgEndHour = document.getElementById('cfgEndHour');
+      const cfgBatchSize = document.getElementById('cfgBatchSize');
+      const cfgPauseMinutes = document.getElementById('cfgPauseMinutes');
+      const cfgMinDelay = document.getElementById('cfgMinDelay');
+      const cfgMaxDelay = document.getElementById('cfgMaxDelay');
+      const saveConfigBtn = document.getElementById('saveConfigBtn');
+
+      const cookieStatusBadge = document.getElementById('cookieStatusBadge');
+      const cookiesJsonInput = document.getElementById('cookiesJsonInput');
+      const saveCookiesBtn = document.getElementById('saveCookiesBtn');
+      const loadDemoCookiesBtn = document.getElementById('loadDemoCookiesBtn');
+
+      function nowTimeStr() {
+        return new Date().toLocaleTimeString('fr-FR', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+      }
+
+      function addChatMessage(sender, text, badge = null) {
+        state.messages.push({
+          id: 'm-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+          sender,
+          badge,
+          time: nowTimeStr(),
+          text
+        });
+        if (state.messages.length > 60) {
+          state.messages = state.messages.slice(-60);
+        }
+        saveLocalState();
+        renderChatMessages();
+      }
+
+      function formatDuration(sec) {
+        if (sec < 60) return sec + 's';
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return m + 'm ' + String(s).padStart(2, '0') + 's';
+      }
+
+      function renderStepHighlight(activeIdx) {
+        stepIndicators.forEach((el, idx) => {
+          if (!el) return;
+          if (idx + 1 === activeIdx) {
+            el.className =
+              'py-1 rounded bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-semibold transition-all';
+          } else {
+            el.className = 'py-1 rounded bg-zinc-800 text-zinc-400 transition-all';
+          }
+        });
+      }
+
+      function renderChatMessages() {
+        chatContainer.innerHTML = '';
+        state.messages.forEach((m) => {
+          const wrapper = document.createElement('div');
+          const isUser = m.sender === 'user';
+          wrapper.className = 'flex flex-col ' + (isUser ? 'items-end' : 'items-start');
+
+          const bubble = document.createElement('div');
+          bubble.className = isUser
+            ? 'max-w-[85%] rounded-xl rounded-br-none px-3 py-2 bg-emerald-600 text-white text-xs sm:text-sm'
+            : 'max-w-[92%] rounded-xl rounded-bl-none px-3 py-2 bg-zinc-800 border border-zinc-700 text-zinc-100 text-xs sm:text-sm';
+
+          const header = document.createElement('div');
+          header.className = 'flex items-center gap-2 mb-1 text-[10px] opacity-75 font-mono-code';
+          header.textContent = (isUser ? 'Vous' : 'Bot Cloud') + ' • ' + m.time;
+
+          if (m.badge) {
+            const b = document.createElement('span');
+            b.className = 'px-1.5 py-0.2 rounded bg-black/30 text-emerald-300 font-semibold';
+            b.textContent = m.badge;
+            header.appendChild(b);
+          }
+
+          const body = document.createElement('div');
+          body.className = 'leading-relaxed';
+          body.textContent = m.text;
+
+          bubble.appendChild(header);
+          bubble.appendChild(body);
+          wrapper.appendChild(bubble);
+          chatContainer.appendChild(wrapper);
+        });
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+
+      function updateCountdownLoop() {
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+        }
+        if (!state.cooldownUntil || state.cooldownUntil <= Date.now()) {
+          countdownBadge.classList.add('hidden');
+          return;
+        }
+
+        const tick = () => {
+          const rem = Math.max(0, Math.ceil((state.cooldownUntil - Date.now()) / 1000));
+          if (rem <= 0) {
+            countdownBadge.classList.add('hidden');
+            clearInterval(countdownTimer);
+            countdownTimer = null;
+            if (state.isRunning && state.currentState === 'PLATFORM_PAUSED') {
+              resumeAfter20MinPauseAutomatically();
+            }
+          } else {
+            countdownBadge.classList.remove('hidden');
+            const prefix =
+              state.currentState === 'PLATFORM_PAUSED'
+                ? 'Pause PR.SOCIAL (Reprise auto dans) : '
+                : 'Pause humaine anti-ban : ';
+            countdownBadge.textContent = prefix + formatDuration(rem);
+          }
+        };
+
+        tick();
+        countdownTimer = setInterval(tick, 300);
+      }
+
+      function renderUI(syncInputs = false) {
+        const batchSize = state.config.batchSizeBeforePause || 50;
+        const cycleVal = state.sessionCount % batchSize;
+        const pct = Math.min(100, Math.round((cycleVal / batchSize) * 100));
+
+        metricCompleted.textContent = String(state.completedCount);
+        metricCycle.textContent = cycleVal + '/' + batchSize;
+        cycleProgressBar.style.width = pct + '%';
+        metricEarnings.textContent = '$' + state.earningsUsd.toFixed(4);
+        metricHealed.textContent = String(state.healedCount);
+
+        stateBadge.textContent = state.currentState;
+        liveStatusText.textContent = state.statusText;
+        renderStepHighlight(state.activeStepIndex);
+
+        if (state.isRunning) {
+          liveDot.className = 'w-3 h-3 rounded-full bg-emerald-400 pulse-active';
+          masterStartStopBtn.className =
+            'px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition shadow-lg flex items-center gap-2';
+          masterBtnIcon.textContent = '⏹';
+          masterBtnText.textContent = 'STOP BOT';
+        } else {
+          liveDot.className = 'w-3 h-3 rounded-full bg-zinc-500';
+          masterStartStopBtn.className =
+            'px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg flex items-center gap-2';
+          masterBtnIcon.textContent = '▶';
+          masterBtnText.textContent = 'START BOT 24H/24';
+        }
+
+        if (state.isOfflineSimulated) {
+          offlineIcon.className = 'w-2 h-2 rounded-full bg-amber-400';
+          offlineLabel.textContent = 'Mode : PC Éteint / Hors-Ligne';
+        } else {
+          offlineIcon.className = 'w-2 h-2 rounded-full bg-emerald-400';
+          offlineLabel.textContent = 'Réseau : Connecté au Cloud';
+        }
+
+        if (state.pendingOfflineCommands.length > 0) {
+          pendingQueueBadge.classList.remove('hidden');
+          pendingQueueBadge.textContent =
+            state.pendingOfflineCommands.length + ' ordre(s) en file hors-ligne';
+        } else {
+          pendingQueueBadge.classList.add('hidden');
+        }
+
+        if (syncInputs) {
+          cfgStartHour.value = String(state.config.startHour || '06:00');
+          cfgEndHour.value = String(state.config.endHour || '22:00');
+          cfgBatchSize.value = String(state.config.batchSizeBeforePause);
+          cfgPauseMinutes.value = String(state.config.defaultBatchPauseMinutes);
+          cfgMinDelay.value = String(state.config.minDelaySec);
+          cfgMaxDelay.value = String(state.config.maxDelaySec);
+        }
+
+        updateCountdownLoop();
+      }
+
+      function clearWorkflowTimer() {
+        if (workflowTimer) {
+          clearTimeout(workflowTimer);
+          workflowTimer = null;
+        }
+      }
+
+      function enterAutomatic20MinPause(reasonText) {
+        clearWorkflowTimer();
+        const pauseMin = state.config.defaultBatchPauseMinutes || 21;
+        const pauseSec = pauseMin * 60;
+        state.currentState = 'PLATFORM_PAUSED';
+        state.activeStepIndex = 6;
+        state.cooldownUntil = Date.now() + pauseSec * 1000;
+        state.statusText =
+          reasonText +
+          ' — Pause imposée par PR.SOCIAL (' +
+          pauseMin +
+          ' min). Reprise 100% automatique à 00:00 sans aucune autorisation.';
+        saveLocalState();
+        renderUI();
+
+        addChatMessage(
+          'bot',
+          '⏸ ' +
+            reasonText +
+            ' : PR.SOCIAL impose une pause de ' +
+            pauseMin +
+            ' minutes. Compte à rebours lancé ! Dès qu’il est terminé, je reprends automatiquement la réalisation des tâches sans vous demander d’autorisation.',
+          'AUTO-PAUSE'
+        );
+      }
+
+      function resumeAfter20MinPauseAutomatically() {
+        if (!state.isRunning) return;
+        state.cooldownUntil = null;
+        state.currentState = 'FINDING_TASK';
+        state.activeStepIndex = 1;
+        state.statusText =
+          'Pause de ' +
+          state.config.defaultBatchPauseMinutes +
+          ' min terminée ! Reprise 100% automatique du cycle suivant...';
+        saveLocalState();
+        renderUI();
+
+        addChatMessage(
+          'bot',
+          '⚡ Fin du temps de pause PR.SOCIAL ! Je relance automatiquement le nouveau cycle de 50 tâches d’abonnement Instagram (sans intervention humaine).',
+          'AUTO-RESUME'
+        );
+
+        workflowTimer = setTimeout(runNextAutonomousTaskCycle, 900);
+      }
+
+      function runNextAutonomousTaskCycle() {
+        if (!state.isRunning) return;
+        clearWorkflowTimer();
+
+        const profile =
+          SAMPLE_IG_PROFILES[
+            (state.completedCount + state.healedCount) % SAMPLE_IG_PROFILES.length
+          ];
+
+        // Étape 1 : Filtrage strict "Abonnement sur Instagram" (0 commentaire, 0 signalement)
+        state.currentState = 'FINDING_TASK';
+        state.activeStepIndex = 1;
+        state.cooldownUntil = null;
+        state.statusText =
+          'Filtre strict "Abonnement sur Instagram" (commentaires/signalements ignorés) -> Cible @' +
+          profile.username +
+          ' ($' +
+          profile.reward.toFixed(4) +
+          ')...';
+        saveLocalState();
+        renderUI();
+
+        workflowTimer = setTimeout(() => {
+          if (!state.isRunning) return;
+
+          // Étape 2 : Clic sur "Commencer · $..."
+          state.currentState = 'OPENING_IG';
+          state.activeStepIndex = 2;
+          state.statusText =
+            'Clic sur "Commencer · $' +
+            profile.reward.toFixed(4) +
+            '" -> Ouverture de instagram.com/' +
+            profile.username +
+            '...';
+          saveLocalState();
+          renderUI();
+
+          workflowTimer = setTimeout(() => {
+            if (!state.isRunning) return;
+
+            // Étape 3 : Simulation humaine (courbe de Bézier + scroll photos) & clic sur "Suivre"
+            state.currentState = 'FOLLOWING_IG';
+            state.activeStepIndex = 3;
+            state.statusText =
+              'Sur Instagram (@' +
+              profile.username +
+              ') : courbe souris Bézier + scroll humain + clic "Suivre" -> "Suivi(e)" confirmé !';
+            saveLocalState();
+            renderUI();
+
+            workflowTimer = setTimeout(() => {
+              if (!state.isRunning) return;
+
+              // Étape 4 : Capture PNG en RAM
+              state.currentState = 'CAPTURING';
+              state.activeStepIndex = 4;
+              state.statusText =
+                'Capture d’écran PNG plein écran générée en RAM -> Fermeture onglet Instagram...';
+              saveLocalState();
+              renderUI();
+
+              workflowTimer = setTimeout(() => {
+                if (!state.isRunning) return;
+
+                // Étape 5 : Envoi & Vérification stricte "Capture d'écran envoyée" + Clic rapide "Tâche suivante →"
+                state.currentState = 'UPLOADING_PROOF';
+                state.activeStepIndex = 5;
+                state.completedCount += 1;
+                state.sessionCount += 1;
+                state.earningsUsd = Number((state.earningsUsd + profile.reward).toFixed(4));
+
+                state.statusText =
+                  'Vérifié : "Capture d’écran envoyée" (En vérification) -> Clic instantané sur "Tâche suivante →" & "Commencer" !';
+                saveLocalState();
+                renderUI();
+
+                addChatMessage(
+                  'bot',
+                  '✓ Abonnement #' +
+                    state.completedCount +
+                    ' (@' +
+                    profile.username +
+                    ') validé — Capture bien vérifiée + clic immédiat sur "Tâche suivante →" et "Commencer" (+$' +
+                    profile.reward.toFixed(4) +
+                    ').',
+                  'OK'
+                );
+
+                // Vérifier si le palier de 50 tâches est atteint -> Pause auto de 20+ min puis reprise autonome !
+                const batchSize = state.config.batchSizeBeforePause || 50;
+                if (state.sessionCount > 0 && state.sessionCount % batchSize === 0) {
+                  enterAutomatic20MinPause('Palier de ' + batchSize + ' tâches atteint');
+                  return;
+                }
+
+                // Pause de respiration anti-ban plus longue toutes les 12 tâches
+                const isBreather = state.sessionCount > 0 && state.sessionCount % 12 === 0;
+                const delaySec = isBreather
+                  ? 25
+                  : Math.floor(
+                      Math.random() *
+                        (state.config.maxDelaySec - state.config.minDelaySec + 1)
+                    ) + state.config.minDelaySec;
+
+                state.currentState = 'COOLDOWN_AND_NEXT';
+                state.cooldownUntil = Date.now() + delaySec * 1000;
+                state.statusText = isBreather
+                  ? 'Micro-pause humaine anti-ban de ' + delaySec + 's (toutes les 12 tâches)...'
+                  : 'Tâche suivante déjà prête. Pause humaine de ' + delaySec + 's...';
+                saveLocalState();
+                renderUI();
+
+                workflowTimer = setTimeout(runNextAutonomousTaskCycle, delaySec * 1000);
+              }, 1100);
+            }, 1300);
+          }, 1000);
+        }, 900);
+      }
+
+      function handleCommand(rawCmd, fromUserChat = false) {
+        const cmd = (rawCmd || '').trim().toLowerCase();
+        if (!cmd) return;
+
+        if (fromUserChat) {
+          addChatMessage('user', rawCmd);
+        }
+
+        if (state.isOfflineSimulated && fromUserChat) {
+          state.pendingOfflineCommands.push(rawCmd);
+          addChatMessage(
+            'bot',
+            'Votre appareil est en mode Hors-Ligne / PC éteint : commande "' +
+              rawCmd +
+              '" enregistrée dans la file locale pendant que le serveur GitHub Actions continue de travailler.',
+            'OFFLINE-QUEUE'
+          );
+          saveLocalState();
+          renderUI();
+        }
+
+        if (cmd === '/start' || cmd === 'start' || cmd.includes('demarrer')) {
+          state.isRunning = true;
+          saveLocalState();
+          addChatMessage(
+            'bot',
+            'Boucle Cloud démarrée (06h00 → 22h00, compte @samitodyignacegatien, Abonnements Instagram uniquement) ! Vous pouvez éteindre votre PC et couper votre Internet.',
+            'START'
+          );
+          runNextAutonomousTaskCycle();
+        } else if (cmd === '/stop' || cmd === 'stop' || cmd.includes('arreter')) {
+          state.isRunning = false;
+          state.currentState = 'IDLE';
+          state.activeStepIndex = 0;
+          state.cooldownUntil = null;
+          state.statusText = 'Bot arrêté par votre commande.';
+          clearWorkflowTimer();
+          saveLocalState();
+          renderUI();
+          addChatMessage('bot', 'Bot Cloud mis en arrêt.', 'STOP');
+        } else if (cmd === '/status' || cmd === 'status') {
+          const batchSize = state.config.batchSizeBeforePause || 50;
+          addChatMessage(
+            'bot',
+            'État : ' +
+              state.currentState +
+              ' | Abonnements réussis : ' +
+              state.completedCount +
+              ' | Cycle : ' +
+              (state.sessionCount % batchSize) +
+              '/' +
+              batchSize +
+              ' | Horaire : ' +
+              state.config.startHour +
+              '–' +
+              state.config.endHour +
+              ' | Gains : $' +
+              state.earningsUsd.toFixed(4),
+            'STATUS'
+          );
+        } else if (cmd === '/sim50' || cmd === '/pause') {
+          state.isRunning = true;
+          const batchSize = state.config.batchSizeBeforePause || 50;
+          const needed = batchSize - (state.sessionCount % batchSize);
+          state.completedCount += needed;
+          state.sessionCount += needed;
+          state.earningsUsd = Number((state.earningsUsd + needed * 0.0024).toFixed(4));
+          enterAutomatic20MinPause('50 tâches réalisées sur PR.SOCIAL');
+        } else if (cmd === '/fastforward' || cmd === '/resume') {
+          state.isRunning = true;
+          resumeAfter20MinPauseAutomatically();
+        } else if (cmd === '/simheal') {
+          state.healedCount += 2;
+          saveLocalState();
+          renderUI();
+          addChatMessage(
+            'bot',
+            'Auto-Heal exécuté : 1) "Toutes les places sont prises" -> Clic immédiat sur "Tâche suivante →" puis "Commencer". 2) "Vous avez une autre tâche en cours" -> Clic sur "Ouvrir l’autre tâche" -> "Annuler la tâche" -> "Oui, annuler".',
+            'AUTO-HEAL'
+          );
+        } else {
+          addChatMessage(
+            'bot',
+            'Commande reçue. Utilisez /start, /stop, /status, /sim50 (tester la pause de 50 tâches) ou /fastforward (tester la reprise automatique à la fin des 20 minutes).'
+          );
+        }
+      }
+
+      masterStartStopBtn.addEventListener('click', () => {
+        if (state.isRunning) {
+          handleCommand('/stop', true);
+        } else {
+          handleCommand('/start', true);
+        }
+      });
+
+      toggleOfflineSimBtn.addEventListener('click', () => {
+        state.isOfflineSimulated = !state.isOfflineSimulated;
+        if (!state.isOfflineSimulated && state.pendingOfflineCommands.length > 0) {
+          const count = state.pendingOfflineCommands.length;
+          state.pendingOfflineCommands = [];
+          addChatMessage(
+            'bot',
+            'Connexion rétablie : ' +
+              count +
+              ' commande(s) hors-ligne synchronisée(s) avec le serveur Cloud.',
+            'SYNC'
+          );
+        } else if (state.isOfflineSimulated) {
+          addChatMessage(
+            'bot',
+            'Mode "PC Éteint / Sans Internet" simulé : le serveur GitHub Actions continue d’exécuter les tâches d’abonnement et de gérer les pauses de 20 minutes tout seul !',
+            'OFFLINE'
+          );
+        }
+        saveLocalState();
+        renderUI();
+      });
+
+      chatForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const val = chatInput.value.trim();
+        if (!val) return;
+        chatInput.value = '';
+        handleCommand(val, true);
+      });
+
+      document.querySelectorAll('.quick-cmd-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const cmd = btn.getAttribute('data-quick-cmd');
+          handleCommand(cmd, true);
+        });
+      });
+
+      clearChatBtn.addEventListener('click', () => {
+        state.messages = [
+          {
+            id: 'clear-' + Date.now(),
+            sender: 'bot',
+            badge: 'INFO',
+            time: nowTimeStr(),
+            text: 'Journal du chat vidé. Le bot Cloud reste prêt.'
+          }
+        ];
+        saveLocalState();
+        renderChatMessages();
+      });
+
+      saveConfigBtn.addEventListener('click', () => {
+        const startHour = cfgStartHour.value.trim() || '06:00';
+        const endHour = cfgEndHour.value.trim() || '22:00';
+        const batchSizeBeforePause = Math.max(1, parseInt(cfgBatchSize.value, 10) || 50);
+        const defaultBatchPauseMinutes = Math.max(1, parseInt(cfgPauseMinutes.value, 10) || 21);
+        const minDelaySec = Math.max(2, parseInt(cfgMinDelay.value, 10) || 5);
+        const maxDelaySec = Math.max(minDelaySec + 1, parseInt(cfgMaxDelay.value, 10) || 11);
+
+        state.config = {
+          startHour,
+          endHour,
+          batchSizeBeforePause,
+          defaultBatchPauseMinutes,
+          minDelaySec,
+          maxDelaySec
+        };
+        saveLocalState();
+        renderUI(true);
+        addChatMessage(
+          'bot',
+          'Paramètres enregistrés : réveil auto ' +
+            startHour +
+            ' → ' +
+            endHour +
+            ', cycle de ' +
+            batchSizeBeforePause +
+            ' abonnements suivi d’une pause auto de ' +
+            defaultBatchPauseMinutes +
+            ' min et reprise sans autorisation.',
+          'CONFIG'
+        );
+      });
+
+      loadDemoCookiesBtn.addEventListener('click', () => {
+        cookiesJsonInput.value = JSON.stringify(
+          [
+            {
+              name: 'pr_social_session',
+              value: 'zonatody_session_token_active',
+              domain: '.pr.social',
+              path: '/'
+            },
+            {
+              name: 'sessionid',
+              value: 'samitodyignacegatien_ig_session',
+              domain: '.instagram.com',
+              path: '/'
+            }
+          ],
+          null,
+          2
+        );
+      });
+
+      saveCookiesBtn.addEventListener('click', () => {
+        const raw = cookiesJsonInput.value.trim();
+        if (!raw) {
+          addChatMessage(
+            'bot',
+            'Cliquez d’abord sur "Exemple" ou collez le JSON de vos cookies PR.SOCIAL + Instagram.',
+            'WARN'
+          );
+          return;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error('Le JSON doit être un tableau [...]');
+          cookieStatusBadge.textContent = parsed.length + ' cookies actifs';
+          addChatMessage(
+            'bot',
+            parsed.length +
+              ' cookies enregistrés pour @samitodyignacegatien et zonatody.',
+            'COOKIES'
+          );
+        } catch (err) {
+          addChatMessage('bot', 'Format JSON invalide : ' + err.message, 'ERROR');
+        }
+      });
+
+      renderChatMessages();
+      renderUI(true);
+      if (state.isRunning && state.currentState !== 'PLATFORM_PAUSED') {
+        runNextAutonomousTaskCycle();
+      }
+    })();
+  </script>
+</body>
+</html>

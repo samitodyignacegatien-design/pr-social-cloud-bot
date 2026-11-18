@@ -1,0 +1,9 @@
+{
+  "name": "PR.SOCIAL Cloud Bot — Mini-Chat 24h/24",
+  "short_name": "PR.SOCIAL Bot",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#10b981",
+  "description": "Mini-Chat de contrôle hors-ligne pour le Bot Cloud PR.SOCIAL & Instagram sans clé API."
+}

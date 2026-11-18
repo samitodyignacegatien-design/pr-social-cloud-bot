@@ -1,0 +1,16 @@
+{
+  "name": "pr-social-cloud-stealth-bot",
+  "version": "3.0.0",
+  "description": "Bot Cloud 24h/24 autonome sans clé API pour PR.SOCIAL & Instagram avec Mini-Chat PWA hors-ligne et reprise automatique après les pauses de 20+ minutes.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.1",
+    "playwright": "^1.48.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: pr-social-stealth-cloud-bot
+    runtime: docker
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
