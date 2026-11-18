@@ -1,6 +1,6 @@
 /**
  * bot_cloud_runner.js — Robot Cloud 100% Autonome pour GitHub Actions (Sans Clé API)
- * Fix upload bouton exact + sélection colonne centrale filtrée par ignoredSignatures
+ * Clic souris Playwright réel sur 1 ("Tâches") et 2 ("Instagram") + Upload filechooser
  */
 
 const fs = require('fs');
@@ -85,6 +85,38 @@ function loadSessionCookies() {
   throw new Error('Aucun cookie trouvé. Ajoutez le secret GitHub SESSION_COOKIES_JSON.');
 }
 
+async function ensureOnInstagramTasksTab(prPage) {
+  try {
+    // 1. Cliquer sur "Tâches" (repère 1 de la capture) si la colonne "Réseaux" n'est pas affichée
+    const hasNetworksCol = await prPage.evaluate(() =>
+      (document.body?.innerText || '').includes('Réseaux')
+    );
+    if (!hasNetworksCol) {
+      const tasksBtn = prPage.locator('a, button').filter({ hasText: /^Tâches/i }).first();
+      if (await tasksBtn.count()) {
+        await tasksBtn.click({ force: true }).catch(() => {});
+        await sleep(1500);
+      }
+    }
+
+    // 2. Cliquer sur "Instagram" dans la colonne Réseaux (repère 2 de la capture) si "Tous les réseaux" est actif
+    const isAllNetworksShowing = await prPage.evaluate(() => {
+      const mid = document.body?.innerText || '';
+      return mid.includes('tâches sur') && mid.includes('Tous les réseaux');
+    });
+
+    if (isAllNetworksShowing || !(await prPage.evaluate(() => (document.body?.innerText || '').includes('Abonnement sur Instagram')))) {
+      const igFilterBtn = prPage.locator('button, a, div').filter({
+        hasText: /^Instagram\s*[\d,.]*$/i
+      }).first();
+      if (await igFilterBtn.count()) {
+        await igFilterBtn.click({ force: true }).catch(() => {});
+        await sleep(1200);
+      }
+    }
+  } catch (_) {}
+}
+
 async function cancelActiveTaskOnPrSocial(prPage) {
   try {
     await prPage.evaluate(async () => {
@@ -112,6 +144,8 @@ async function cancelActiveTaskOnPrSocial(prPage) {
 
 async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures) {
   try {
+    await ensureOnInstagramTasksTab(page);
+
     return await page.evaluate(
       async ({ ignoredList, forbiddenWords }) => {
         const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -179,20 +213,11 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
         const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
 
-        const igNetFilter = findBtn(['instagram'], 100, true);
-        if (igNetFilter && igNetFilter.getBoundingClientRect().left < 450) {
-          const bg = window.getComputedStyle(igNetFilter).backgroundColor || '';
-          if (!bg.includes('255, 255, 255')) {
-            igNetFilter.click();
-            await sleepInPage(350);
-          }
-        }
-
         const clickNextNonIgnoredMiddleRow = async () => {
           const midRows = Array.from(document.querySelectorAll('div, li, a, button')).filter((el) => {
             if (!isVis(el)) return false;
             const r = el.getBoundingClientRect();
-            if (r.left < 250 || r.left > minRightX - 20 || r.height < 40 || r.height > 120 || r.width < 180) return false;
+            if (r.left < 200 || r.left > minRightX - 10 || r.height < 36 || r.height > 130 || r.width < 150) return false;
             const t = norm(el.innerText || '');
             const isStrictSub = t.includes('abonnement sur instagram') && t.includes('@');
             const isForbidden = forbiddenWords.some((fw) => t.includes(fw));
@@ -206,7 +231,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
               const url = `https://www.instagram.com/${handle}/`;
               if (!ignoredSet.has(norm(url))) {
                 row.click();
-                await sleepInPage(450);
+                await sleepInPage(500);
                 return true;
               }
             }
@@ -245,10 +270,9 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           const nextBtn = findBtn(['tache suivante', 'next task'], minRightX);
           if (nextBtn) {
             nextBtn.click();
-            await sleepInPage(400);
+            await sleepInPage(450);
           }
 
-          // Inspecter UNIQUEMENT le panneau de droite
           let rightRaw = getRightPanelText(minRightX);
           let rightNorm = norm(rightRaw);
 
@@ -315,7 +339,8 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           }
         }
 
-        return { noTask: true };
+        const preview = (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+        return { noTask: true, preview };
       },
       { ignoredList: ignoredSignatures, forbiddenWords: FORBIDDEN_TASK_KEYWORDS }
     );
@@ -332,13 +357,11 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 async function uploadProofToPrSocial(prPage, tempProofPath) {
   let fileSet = false;
 
-  // 1. Chercher un <input type="file"> déjà présent
   const existingInput = await prPage.$('input[type="file"]');
   if (existingInput) {
     await existingInput.setInputFiles(tempProofPath);
     fileSet = true;
   } else {
-    // 2. Cibler précisément le <button> "Ajouter une capture d'écran" dans la colonne de droite
     const uploadBtn = prPage.locator('button').filter({
       hasText: /Ajouter une capture|Ajoutez une capture/i
     }).first();
@@ -455,7 +478,7 @@ async function main() {
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
       emptyRetries += 1;
-      console.log(`🔍 Aucune nouvelle tâche visible (${emptyRetries}/3). Scroll & attente 6s...`);
+      console.log(`🔍 Aucune tâche (${emptyRetries}/3) | URL: ${prPage.url()} | Écran: ${taskResult?.preview || ''}`);
       await prPage.mouse.wheel(0, 500);
       await sleep(6000);
       if (emptyRetries >= 3) {
