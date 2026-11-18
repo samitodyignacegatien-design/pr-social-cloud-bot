@@ -1,7 +1,5 @@
 /**
- * bot_cloud_runner.js — Robot Cloud 24h/24 Eco-Quota (Sans sommeil nocturne)
- * S'éteint immédiatement après 50 tâches ou sur pause PR.SOCIAL pour économiser le quota GitHub,
- * puis le cron GitHub le rallume automatiquement une fois la pause terminée.
+ * bot_cloud_runner.js — Robot Cloud 24h/24 Eco-Quota (avec rechargement auto avant arrêt)
  */
 
 const fs = require('fs');
@@ -16,7 +14,7 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '40', 10);
+const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '50', 10);
 
 const FORBIDDEN_TASK_KEYWORDS = [
   'commentaire', 'commenter', 'comment', 'signaler', 'signalement',
@@ -59,7 +57,6 @@ function loadBotState() {
   return {
     completedCount: 0,
     failedCount: 0,
-    cycleCount: 0,
     ignoredSignatures: [],
     lastUpdated: Date.now()
   };
@@ -235,20 +232,30 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return panels[0] ? panels[0].innerText || '' : '';
         };
 
-        const detectForcedPause = () => {
-          const raw = document.body?.innerText || '';
+        const detectForcedPause = (panelRaw) => {
+          const raw = panelRaw || document.body?.innerText || '';
           const txt = norm(raw);
-          const pauseWords = ['pause', 'limite atteinte', 'trop de taches', 'attendez', 'patienter', 'reessayez dans'];
+          const pauseWords = [
+            'pause', 'faites une pause', 'limite atteinte', 'trop de taches',
+            'attendez', 'patienter', 'reessayez dans', 'revenez dans', 'disponible dans', 'take a break'
+          ];
           if (!pauseWords.some((w) => txt.includes(w))) return null;
 
           const minMatch = txt.match(/(\d{1,3})\s*(?:minute|minutes|min|mn)\b/i);
           if (minMatch) {
             const mins = parseInt(minMatch[1], 10);
             if (mins >= 1 && mins <= 240) {
-              return { isPaused: true, reason: `Pause PR.SOCIAL détectée (${mins} min)` };
+              return { isPaused: true, minutes: mins, reason: `Pause PR.SOCIAL (${mins} min)` };
             }
           }
-          return null;
+
+          const timerMatch = raw.match(/\b([0-5]?\d):([0-5]\d)\b/);
+          if (timerMatch) {
+            const mins = Math.max(1, parseInt(timerMatch[1], 10) || 1);
+            return { isPaused: true, minutes: mins, reason: `Minuteur PR.SOCIAL (${timerMatch[0]})` };
+          }
+
+          return { isPaused: true, minutes: 20, reason: 'Pause suggérée par PR.SOCIAL' };
         };
 
         const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
@@ -281,7 +288,8 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         };
 
         for (let cycle = 0; cycle < 6; cycle++) {
-          const pauseInfo = detectForcedPause();
+          const rightPanelNow = getRightPanelText(minRightX);
+          const pauseInfo = detectForcedPause(rightPanelNow);
           if (pauseInfo) return { platformPaused: true, ...pauseInfo };
 
           const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
@@ -342,10 +350,10 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             await sleepInPage(1100);
           }
 
-          const afterStartPause = detectForcedPause();
+          const postStartRaw = getRightPanelText(minRightX);
+          const afterStartPause = detectForcedPause(postStartRaw);
           if (afterStartPause) return { platformPaused: true, ...afterStartPause };
 
-          const postStartRaw = getRightPanelText(minRightX);
           const postStartNorm = norm(postStartRaw);
 
           if (postStartNorm.includes('toutes les places sont prises') || postStartNorm.includes('tout les taches sont prises')) {
@@ -594,9 +602,8 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
 
 async function main() {
   console.log('================================================================');
-  console.log('🚀 Bot Cloud PR.SOCIAL 24h/24 (Mode Éco-Quota sans sommeil)');
+  console.log('🚀 Bot Cloud PR.SOCIAL 24h/24 (Rechargement auto avant arrêt)');
   console.log('🎯 Compte @samitodyignacegatien | Abonnements IG uniquement');
-  console.log('⏸️ Arrêt automatique dès la pause de 50 tâches (reprise par cron)');
   console.log('================================================================');
 
   const startTime = Date.now();
@@ -628,7 +635,7 @@ async function main() {
 
   while (true) {
     if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
-      console.log('⏱️ Fin de session (40 min). Arrêt propre pour économiser le quota.');
+      console.log('⏱️ Fin de session (50 min). Passage au prochain réveil cron.');
       break;
     }
 
@@ -636,20 +643,34 @@ async function main() {
 
     if (taskResult?.retry) continue;
 
-    // ÉCONOMIE DE QUOTA : Si PR.SOCIAL impose la pause, on éteint immédiatement le bot !
     if (taskResult?.platformPaused) {
-      console.log(`⏸️ ${taskResult.reason} -> Extinction immédiate pour économiser le quota GitHub. Le cron rallumera le bot automatiquement !`);
-      break;
+      const mins = taskResult.minutes || 20;
+      if (mins <= 5) {
+        console.log(`⏳ ${taskResult.reason} (<= 5 min) -> Attente exacte de ${mins} min sur place avant reprise...`);
+        await sleep((mins * 60 + 20) * 1000);
+        await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        await sleep(2500);
+        continue;
+      } else {
+        console.log(`⏸️ ${taskResult.reason} (> 5 min) -> Extinction immédiate pour économiser le quota GitHub. Reprise automatique au prochain réveil !`);
+        break;
+      }
     }
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
       emptyRetries += 1;
-      console.log(`🔍 Aucune tâche (${emptyRetries}/3)`);
-      await prPage.mouse.wheel(0, 500);
-      await sleep(4000);
-      if (emptyRetries >= 3) {
-        console.log('🛑 Liste vide après 3 essais -> Extinction pour économiser le quota jusqu’au prochain réveil.');
+      console.log(`🔍 Aucune tâche visible (${emptyRetries}/6)`);
+      if (emptyRetries === 3) {
+        console.log('🔄 Rechargement complet de la page PR.SOCIAL pour actualiser la liste...');
+        await prPage.reload({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {});
+        await sleep(3000);
+      } else if (emptyRetries >= 6) {
+        console.log('🛑 Liste vraiment vide même après rechargement -> Extinction pour économiser le quota.');
         break;
+      } else {
+        await prPage.mouse.move(600, 450);
+        await prPage.mouse.wheel(0, 500);
+        await sleep(3500);
       }
       continue;
     }
@@ -756,19 +777,12 @@ async function main() {
 
     if (uploadOutcome.verified) {
       state.completedCount = (state.completedCount || 0) + 1;
-      state.cycleCount = (state.cycleCount || 0) + 1;
       state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
       saveBotState(state);
 
-      console.log(`✅ Tâche #${state.completedCount} validée (@${taskResult.username}) | Cycle : ${state.cycleCount % 50}/50`);
+      console.log(`✅ Tâche #${state.completedCount} validée (@${taskResult.username})`);
 
-      // ÉCONOMIE DE QUOTA : À 50 tâches, on s'éteint tout de suite au lieu de dormir 21 min sur GitHub !
-      if (state.cycleCount > 0 && state.cycleCount % 50 === 0) {
-        console.log('⏸️ 50 tâches réalisées ! Extinction du bot pendant la pause PR.SOCIAL (le cron le rallumera tout seul).');
-        break;
-      }
-
-      if (state.cycleCount > 0 && state.cycleCount % 12 === 0) {
+      if (state.completedCount > 0 && state.completedCount % 12 === 0) {
         const breatherSec = randomBetween(22, 38);
         console.log(`☕ Micro-pause humaine anti-ban (${breatherSec}s)...`);
         await sleep(breatherSec * 1000);
