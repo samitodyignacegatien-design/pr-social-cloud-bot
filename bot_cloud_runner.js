@@ -1,6 +1,6 @@
 /**
  * bot_cloud_runner.js — Robot Cloud 100% Autonome pour GitHub Actions (Sans Clé API)
- * Protection anti-navigation (Execution context destroyed) + filechooser natif + anti-boucle
+ * Fix upload bouton exact + sélection colonne centrale filtrée par ignoredSignatures
  */
 
 const fs = require('fs');
@@ -90,14 +90,17 @@ async function cancelActiveTaskOnPrSocial(prPage) {
     await prPage.evaluate(async () => {
       const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
       const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-      const all = Array.from(document.querySelectorAll('button, a, div, span'));
+      const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
+      const all = Array.from(document.querySelectorAll('button, a, div, span')).filter(
+        (el) => el.getBoundingClientRect().left >= minRightX
+      );
       const cancelBtn = all.find((el) => norm(el.innerText || '').includes('annuler la tache'));
       if (cancelBtn) {
         cancelBtn.click();
         await sleepInPage(450);
-        const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span')).find((el) =>
-          norm(el.innerText || '').includes('oui, annuler')
-        );
+        const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span'))
+          .filter((el) => el.getBoundingClientRect().left >= minRightX)
+          .find((el) => norm(el.innerText || '').includes('oui, annuler'));
         if (confirmBtn) {
           confirmBtn.click();
           await sleepInPage(500);
@@ -147,6 +150,16 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return all[0] || null;
         };
 
+        const getRightPanelText = (minRightX) => {
+          const panels = Array.from(document.querySelectorAll('div, aside, section')).filter((el) => {
+            if (!isVis(el)) return false;
+            const r = el.getBoundingClientRect();
+            return r.left >= minRightX && r.width > 200 && r.height > 200;
+          });
+          panels.sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height);
+          return panels[0] ? panels[0].innerText || '' : '';
+        };
+
         const detectForcedPause = () => {
           const raw = document.body?.innerText || '';
           const txt = norm(raw);
@@ -164,7 +177,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         };
 
         const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
-        const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
+        const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
 
         const igNetFilter = findBtn(['instagram'], 100, true);
         if (igNetFilter && igNetFilter.getBoundingClientRect().left < 450) {
@@ -174,6 +187,32 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             await sleepInPage(350);
           }
         }
+
+        const clickNextNonIgnoredMiddleRow = async () => {
+          const midRows = Array.from(document.querySelectorAll('div, li, a, button')).filter((el) => {
+            if (!isVis(el)) return false;
+            const r = el.getBoundingClientRect();
+            if (r.left < 250 || r.left > minRightX - 20 || r.height < 40 || r.height > 120 || r.width < 180) return false;
+            const t = norm(el.innerText || '');
+            const isStrictSub = t.includes('abonnement sur instagram') && t.includes('@');
+            const isForbidden = forbiddenWords.some((fw) => t.includes(fw));
+            return isStrictSub && !isForbidden;
+          });
+
+          for (const row of midRows) {
+            const m = (row.innerText || '').match(/@([a-zA-Z0-9_.]{2,35})/);
+            if (m) {
+              const handle = m[1].replace(/\.$/, '').toLowerCase();
+              const url = `https://www.instagram.com/${handle}/`;
+              if (!ignoredSet.has(norm(url))) {
+                row.click();
+                await sleepInPage(450);
+                return true;
+              }
+            }
+          }
+          return false;
+        };
 
         for (let cycle = 0; cycle < 6; cycle++) {
           const pauseInfo = detectForcedPause();
@@ -209,59 +248,59 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             await sleepInPage(400);
           }
 
-          const rightPanelText = norm(document.body?.innerText || '');
-          const hasForbiddenTaskType = forbiddenWords.some(
-            (w) => rightPanelText.includes(`${w} sur instagram`) || rightPanelText.includes(`type ${w}`)
+          // Inspecter UNIQUEMENT le panneau de droite
+          let rightRaw = getRightPanelText(minRightX);
+          let rightNorm = norm(rightRaw);
+
+          const workerMatchRight = rightRaw.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
+          const workerHandle = workerMatchRight ? workerMatchRight[1].toLowerCase() : 'samitodyignacegatien';
+          const currentTargetMatch = rightRaw.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
+          const currentHandle = currentTargetMatch ? currentTargetMatch[1].replace(/\.$/, '').toLowerCase() : null;
+          const currentUrl = currentHandle ? `https://www.instagram.com/${currentHandle}/` : null;
+
+          const isRightPanelForbidden = forbiddenWords.some(
+            (w) => rightNorm.includes(`${w} sur instagram`) || rightNorm.includes(`type ${w}`)
           );
+          const isRightPanelIgnored = Boolean(currentUrl && ignoredSet.has(norm(currentUrl)));
+          const isRightPanelEmpty = !rightNorm.includes('abonnement sur instagram') || !currentHandle;
 
-          if (hasForbiddenTaskType || !rightPanelText.includes('abonnement sur instagram')) {
-            const midRows = Array.from(document.querySelectorAll('div, li, a')).filter((el) => {
-              if (!isVis(el)) return false;
-              const r = el.getBoundingClientRect();
-              if (r.left < 260 || r.left > 930 || r.height < 40 || r.height > 115) return false;
-              const t = norm(el.innerText || '');
-              const isStrictSub = t.includes('abonnement sur instagram') && t.includes('@');
-              const isForbidden = forbiddenWords.some((fw) => t.includes(fw));
-              return isStrictSub && !isForbidden;
-            });
-
-            if (midRows.length > 0) {
-              midRows[0].click();
-              await sleepInPage(400);
-            }
+          if (isRightPanelEmpty || isRightPanelForbidden || isRightPanelIgnored) {
+            const clicked = await clickNextNonIgnoredMiddleRow();
+            if (!clicked) break;
+            rightRaw = getRightPanelText(minRightX);
+            rightNorm = norm(rightRaw);
           }
 
           const startBtn = findBtn(['commencer', 'start task'], minRightX, true);
           if (startBtn) {
             startBtn.click();
-            await sleepInPage(700);
+            await sleepInPage(750);
           }
 
           const afterStartPause = detectForcedPause();
           if (afterStartPause) return { platformPaused: true, ...afterStartPause };
 
-          const bodyNorm = norm(document.body?.innerText || '');
+          const postStartRaw = getRightPanelText(minRightX);
+          const postStartNorm = norm(postStartRaw);
 
-          if (bodyNorm.includes('toutes les places sont prises') || bodyNorm.includes('tout les taches sont prises')) {
+          if (postStartNorm.includes('toutes les places sont prises') || postStartNorm.includes('tout les taches sont prises')) {
             const nextAfterTaken = findBtn(['tache suivante'], minRightX);
             if (nextAfterTaken) {
               nextAfterTaken.click();
               await sleepInPage(350);
-              continue;
+            } else {
+              await clickNextNonIgnoredMiddleRow();
             }
-          }
-
-          if (bodyNorm.includes('vous avez une autre tache en cours')) {
             continue;
           }
 
-          const rawText = document.body?.innerText || '';
-          const workerMatch = rawText.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
-          const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : 'samitodyignacegatien';
+          if (postStartNorm.includes('vous avez une autre tache en cours')) {
+            continue;
+          }
 
-          const targetMatch = rawText.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
-          if (targetMatch && targetMatch[1]) {
-            const targetUser = targetMatch[1].replace(/\.$/, '');
+          const finalMatch = postStartRaw.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
+          if (finalMatch && finalMatch[1]) {
+            const targetUser = finalMatch[1].replace(/\.$/, '');
             if (targetUser.toLowerCase() !== workerHandle) {
               const igUrl = `https://www.instagram.com/${targetUser}/`;
               if (!ignoredSet.has(norm(igUrl))) {
@@ -282,7 +321,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
     );
   } catch (err) {
     if (String(err.message || '').includes('Execution context was destroyed') || String(err.message || '').includes('navigation')) {
-      console.log('🔄 Changement de page détecté sur PR.SOCIAL, attente du chargement...');
       await page.waitForLoadState('domcontentloaded').catch(() => {});
       await sleep(2500);
       return { retry: true };
@@ -294,19 +332,22 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 async function uploadProofToPrSocial(prPage, tempProofPath) {
   let fileSet = false;
 
+  // 1. Chercher un <input type="file"> déjà présent
   const existingInput = await prPage.$('input[type="file"]');
   if (existingInput) {
     await existingInput.setInputFiles(tempProofPath);
     fileSet = true;
   } else {
-    const uploadButtonLocator = prPage.locator('button, a, label, div').filter({
+    // 2. Cibler précisément le <button> "Ajouter une capture d'écran" dans la colonne de droite
+    const uploadBtn = prPage.locator('button').filter({
       hasText: /Ajouter une capture|Ajoutez une capture/i
-    }).last();
+    }).first();
 
     try {
+      await uploadBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
       const [fileChooser] = await Promise.all([
-        prPage.waitForEvent('filechooser', { timeout: 5000 }),
-        uploadButtonLocator.click({ force: true })
+        prPage.waitForEvent('filechooser', { timeout: 6000 }),
+        uploadBtn.click({ force: true })
       ]);
       await fileChooser.setFiles(tempProofPath);
       fileSet = true;
@@ -320,7 +361,7 @@ async function uploadProofToPrSocial(prPage, tempProofPath) {
   }
 
   if (!fileSet) {
-    return { verified: false, reason: 'Bouton ou champ upload introuvable sur PR.SOCIAL' };
+    return { verified: false, reason: 'Bouton "Ajouter une capture d’écran" ou input fichier introuvable' };
   }
 
   return await prPage.evaluate(async () => {
@@ -330,13 +371,13 @@ async function uploadProofToPrSocial(prPage, tempProofPath) {
     const minRightX = Math.floor((window.innerWidth || 1366) * 0.5);
 
     const start = Date.now();
-    while (Date.now() - start < 8000) {
+    while (Date.now() - start < 8500) {
       const txt = norm(document.body?.innerText || '');
       const hasSent =
         txt.includes("capture d'ecran envoyee") ||
         txt.includes('nous verifions votre capture') ||
         txt.includes('en verification');
-      const nextBtn = Array.from(document.querySelectorAll('button, a, div')).find((el) => {
+      const nextBtn = Array.from(document.querySelectorAll('button, a')).find((el) => {
         const r = el.getBoundingClientRect();
         return r.left >= minRightX && norm(el.innerText || '').includes('tache suivante');
       });
@@ -350,7 +391,7 @@ async function uploadProofToPrSocial(prPage, tempProofPath) {
       }
       await sleepInPage(150);
     }
-    return { verified: false, reason: 'Confirmation "Capture d’écran envoyée" non détectée sous 8s' };
+    return { verified: false, reason: 'Confirmation "Capture d’écran envoyée" non détectée sous 8.5s' };
   });
 }
 
@@ -386,6 +427,8 @@ async function main() {
   await prPage.goto('https://pr.social/', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
   await sleep(3000);
 
+  let emptyRetries = 0;
+
   while (true) {
     if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
       console.log('⏱️ Fin du relais Cloud. Sauvegarde de l’état.');
@@ -399,9 +442,7 @@ async function main() {
 
     const taskResult = await findAndStartNextInstagramSubscriptionTask(prPage, state.ignoredSignatures || []);
 
-    if (taskResult?.retry) {
-      continue;
-    }
+    if (taskResult?.retry) continue;
 
     if (taskResult?.platformPaused) {
       const waitSec = taskResult.waitSeconds || 21 * 60;
@@ -413,12 +454,19 @@ async function main() {
     }
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
-      console.log('🔍 Aucune nouvelle tâche visible. Scroll & attente 8s...');
+      emptyRetries += 1;
+      console.log(`🔍 Aucune nouvelle tâche visible (${emptyRetries}/3). Scroll & attente 6s...`);
       await prPage.mouse.wheel(0, 500);
-      await sleep(8000);
+      await sleep(6000);
+      if (emptyRetries >= 3) {
+        emptyRetries = 0;
+        await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        await sleep(2500);
+      }
       continue;
     }
 
+    emptyRetries = 0;
     console.log(`▶️ Tâche sélectionnée : ${taskResult.title}`);
 
     const igPage = await context.newPage();
