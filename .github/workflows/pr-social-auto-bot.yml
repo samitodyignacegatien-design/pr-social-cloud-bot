@@ -1,0 +1,55 @@
+name: PR.SOCIAL Stealth IG Bot (Auto 06h00 - 22h00 Madagascar)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+    - cron: "30 8 * * *"
+    - cron: "0 14 * * *"
+
+concurrency:
+  group: pr-social-mono-account-samitodyignacegatien
+  cancel-in-progress: false
+
+jobs:
+  run-stealth-ig-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - name: 1. Recuperation du code du Bot Cloud
+        uses: actions/checkout@v4
+
+      - name: 2. Installation de Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 3. Installation du navigateur Chromium Furtif
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: 4. Restauration du compteur de taches
+        uses: actions/cache/restore@v4
+        with:
+          path: data/bot_state.json
+          key: pr-social-state-${{ github.run_id }}
+          restore-keys: |
+            pr-social-state-
+
+      - name: 5. Execution autonome du Bot (Abonnements IG uniquement + Pause 50 taches)
+        env:
+          SESSION_COOKIES_JSON: ${{ secrets.SESSION_COOKIES_JSON }}
+          MAX_RUNTIME_MINUTES: "315"
+          IG_WORKER_USERNAME: "samitodyignacegatien"
+          PR_WORKER_USERNAME: "zonatody"
+          TZ: "Indian/Antananarivo"
+        run: node bot_cloud_runner.js
+
+      - name: 6. Sauvegarde de l'etat pour le prochain relais
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/bot_state.json
+          key: pr-social-state-${{ github.run_id }}
