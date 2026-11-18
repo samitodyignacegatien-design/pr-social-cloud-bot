@@ -1,11 +1,13 @@
-name: PR.SOCIAL Stealth IG Bot (Auto 06h00 - 22h00 Madagascar)
+name: PR.SOCIAL Stealth IG Bot (24h/24 Eco-Quota)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"
-    - cron: "30 8 * * *"
-    - cron: "0 14 * * *"
+    # Relais automatique toutes les 45 minutes, 24h/24 (00:00, 00:45, 01:30, 02:15, etc.)
+    - cron: "0 0,3,6,9,12,15,18,21 * * *"
+    - cron: "45 0,3,6,9,12,15,18,21 * * *"
+    - cron: "30 1,4,7,10,13,16,19,22 * * *"
+    - cron: "15 2,5,8,11,14,17,20,23 * * *"
 
 concurrency:
   group: pr-social-mono-account-samitodyignacegatien
@@ -14,7 +16,7 @@ concurrency:
 jobs:
   run-stealth-ig-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 60
 
     steps:
       - name: 1. Recuperation du code du Bot Cloud
@@ -34,22 +36,22 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data/bot_state.json
-          key: pr-social-state-${{ github.run_id }}
+          key: pr-social-state-${{ github.sha }}
           restore-keys: |
             pr-social-state-
 
-      - name: 5. Execution autonome du Bot (Abonnements IG uniquement + Pause 50 taches)
+      - name: 5. Execution autonome du Bot (24h/24, Abonnements IG, Arret sur Pause 50 taches)
         env:
           SESSION_COOKIES_JSON: ${{ secrets.SESSION_COOKIES_JSON }}
-          MAX_RUNTIME_MINUTES: "315"
+          MAX_RUNTIME_MINUTES: "40"
           IG_WORKER_USERNAME: "samitodyignacegatien"
           PR_WORKER_USERNAME: "zonatody"
           TZ: "Indian/Antananarivo"
         run: node bot_cloud_runner.js
 
-      - name: 6. Sauvegarde de l'etat pour le prochain relais
+      - name: 6. Sauvegarde de l'etat pour le prochain reveil
         if: always()
         uses: actions/cache/save@v4
         with:
           path: data/bot_state.json
-          key: pr-social-state-${{ github.run_id }}
+          key: pr-social-state-${{ github.sha }}-${{ github.job }}
