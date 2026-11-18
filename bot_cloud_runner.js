@@ -1,6 +1,6 @@
 /**
  * bot_cloud_runner.js — Robot Cloud 100% Autonome pour GitHub Actions (Sans Clé API)
- * Version corrigée : intercepteur filechooser natif Playwright + anti-boucle infinie
+ * Protection anti-navigation (Execution context destroyed) + filechooser natif + anti-boucle
  */
 
 const fs = require('fs');
@@ -86,206 +86,219 @@ function loadSessionCookies() {
 }
 
 async function cancelActiveTaskOnPrSocial(prPage) {
-  await prPage.evaluate(async () => {
-    const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-    const all = Array.from(document.querySelectorAll('button, a, div, span'));
-    const cancelBtn = all.find((el) => norm(el.innerText || '').includes('annuler la tache'));
-    if (cancelBtn) {
-      cancelBtn.click();
-      await sleepInPage(450);
-      const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span')).find((el) =>
-        norm(el.innerText || '').includes('oui, annuler')
-      );
-      if (confirmBtn) {
-        confirmBtn.click();
-        await sleepInPage(500);
+  try {
+    await prPage.evaluate(async () => {
+      const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
+      const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const all = Array.from(document.querySelectorAll('button, a, div, span'));
+      const cancelBtn = all.find((el) => norm(el.innerText || '').includes('annuler la tache'));
+      if (cancelBtn) {
+        cancelBtn.click();
+        await sleepInPage(450);
+        const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span')).find((el) =>
+          norm(el.innerText || '').includes('oui, annuler')
+        );
+        if (confirmBtn) {
+          confirmBtn.click();
+          await sleepInPage(500);
+        }
       }
-    }
-  });
+    });
+  } catch (_) {}
 }
 
 async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures) {
-  return await page.evaluate(
-    async ({ ignoredList, forbiddenWords }) => {
-      const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-      const norm = (s) =>
-        (s || '')
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/['’`]/g, "'")
-          .replace(/\s+/g, ' ')
-          .trim();
+  try {
+    return await page.evaluate(
+      async ({ ignoredList, forbiddenWords }) => {
+        const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
+        const norm = (s) =>
+          (s || '')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/['’`]/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
 
-      const isVis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 4 && r.height > 4;
-      };
-
-      const findBtn = (labels, minLeft = 0, exactPrefix = false) => {
-        const targets = labels.map(norm);
-        const all = Array.from(
-          document.querySelectorAll('button, a, label, [role="button"], div, span')
-        ).filter((el) => {
-          if (!isVis(el)) return false;
+        const isVis = (el) => {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
           const r = el.getBoundingClientRect();
-          if (r.left < minLeft) return false;
-          const txt = norm(`${el.innerText || ''} ${el.getAttribute('aria-label') || ''}`);
-          if (!txt || txt.length > 90) return false;
-          return exactPrefix
-            ? targets.some((t) => txt === t || txt.startsWith(t))
-            : targets.some((t) => txt.includes(t));
-        });
-        all.sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99));
-        return all[0] || null;
-      };
+          return r.width > 4 && r.height > 4;
+        };
 
-      const detectForcedPause = () => {
-        const raw = document.body?.innerText || '';
-        const txt = norm(raw);
-        const pauseWords = ['pause', 'limite atteinte', 'trop de taches', 'attendez', 'patienter', 'reessayez dans'];
-        if (!pauseWords.some((w) => txt.includes(w))) return null;
-
-        const minMatch = txt.match(/(\d{1,3})\s*(?:minute|minutes|min|mn)\b/i);
-        if (minMatch) {
-          const mins = parseInt(minMatch[1], 10);
-          if (mins >= 1 && mins <= 240) {
-            return { isPaused: true, waitSeconds: mins * 60 + 40, reason: `Pause PR.SOCIAL (${mins} min)` };
-          }
-        }
-        return null;
-      };
-
-      const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
-      const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
-
-      const igNetFilter = findBtn(['instagram'], 100, true);
-      if (igNetFilter && igNetFilter.getBoundingClientRect().left < 450) {
-        igNetFilter.click();
-        await sleepInPage(300);
-      }
-
-      for (let cycle = 0; cycle < 6; cycle++) {
-        const pauseInfo = detectForcedPause();
-        if (pauseInfo) return { platformPaused: true, ...pauseInfo };
-
-        const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
-        if (openOtherBtn) {
-          openOtherBtn.click();
-          await sleepInPage(450);
-          const cancelBtn = findBtn(['annuler la tache'], minRightX);
-          if (cancelBtn) {
-            cancelBtn.click();
-            await sleepInPage(350);
-            const confirmCancelBtn = findBtn(['oui, annuler', 'oui annuler'], minRightX);
-            if (confirmCancelBtn) {
-              confirmCancelBtn.click();
-              await sleepInPage(450);
-            }
-          }
-          continue;
-        }
-
-        const confirmCancelImmediate = findBtn(['oui, annuler', 'oui annuler'], minRightX);
-        if (confirmCancelImmediate) {
-          confirmCancelImmediate.click();
-          await sleepInPage(400);
-          continue;
-        }
-
-        const nextBtn = findBtn(['tache suivante', 'next task'], minRightX);
-        if (nextBtn) {
-          nextBtn.click();
-          await sleepInPage(400);
-        }
-
-        const rightPanelText = norm(document.body?.innerText || '');
-        const hasForbiddenTaskType = forbiddenWords.some(
-          (w) => rightPanelText.includes(`${w} sur instagram`) || rightPanelText.includes(`type ${w}`)
-        );
-
-        if (hasForbiddenTaskType || !rightPanelText.includes('abonnement sur instagram')) {
-          const midRows = Array.from(document.querySelectorAll('div, li, a')).filter((el) => {
+        const findBtn = (labels, minLeft = 0, exactPrefix = false) => {
+          const targets = labels.map(norm);
+          const all = Array.from(
+            document.querySelectorAll('button, a, label, [role="button"], div, span')
+          ).filter((el) => {
             if (!isVis(el)) return false;
             const r = el.getBoundingClientRect();
-            if (r.left < 260 || r.left > 930 || r.height < 40 || r.height > 115) return false;
-            const t = norm(el.innerText || '');
-            const isStrictSub = t.includes('abonnement sur instagram') && t.includes('@');
-            const isForbidden = forbiddenWords.some((fw) => t.includes(fw));
-            return isStrictSub && !isForbidden;
+            if (r.left < minLeft) return false;
+            const txt = norm(`${el.innerText || ''} ${el.getAttribute('aria-label') || ''}`);
+            if (!txt || txt.length > 90) return false;
+            return exactPrefix
+              ? targets.some((t) => txt === t || txt.startsWith(t))
+              : targets.some((t) => txt.includes(t));
           });
+          all.sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99));
+          return all[0] || null;
+        };
 
-          if (midRows.length > 0) {
-            midRows[0].click();
-            await sleepInPage(400);
+        const detectForcedPause = () => {
+          const raw = document.body?.innerText || '';
+          const txt = norm(raw);
+          const pauseWords = ['pause', 'limite atteinte', 'trop de taches', 'attendez', 'patienter', 'reessayez dans'];
+          if (!pauseWords.some((w) => txt.includes(w))) return null;
+
+          const minMatch = txt.match(/(\d{1,3})\s*(?:minute|minutes|min|mn)\b/i);
+          if (minMatch) {
+            const mins = parseInt(minMatch[1], 10);
+            if (mins >= 1 && mins <= 240) {
+              return { isPaused: true, waitSeconds: mins * 60 + 40, reason: `Pause PR.SOCIAL (${mins} min)` };
+            }
+          }
+          return null;
+        };
+
+        const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
+        const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
+
+        const igNetFilter = findBtn(['instagram'], 100, true);
+        if (igNetFilter && igNetFilter.getBoundingClientRect().left < 450) {
+          const bg = window.getComputedStyle(igNetFilter).backgroundColor || '';
+          if (!bg.includes('255, 255, 255')) {
+            igNetFilter.click();
+            await sleepInPage(350);
           }
         }
 
-        const startBtn = findBtn(['commencer', 'start task'], minRightX, true);
-        if (startBtn) {
-          startBtn.click();
-          await sleepInPage(700);
-        }
+        for (let cycle = 0; cycle < 6; cycle++) {
+          const pauseInfo = detectForcedPause();
+          if (pauseInfo) return { platformPaused: true, ...pauseInfo };
 
-        const afterStartPause = detectForcedPause();
-        if (afterStartPause) return { platformPaused: true, ...afterStartPause };
-
-        const bodyNorm = norm(document.body?.innerText || '');
-
-        if (bodyNorm.includes('toutes les places sont prises') || bodyNorm.includes('tout les taches sont prises')) {
-          const nextAfterTaken = findBtn(['tache suivante'], minRightX);
-          if (nextAfterTaken) {
-            nextAfterTaken.click();
-            await sleepInPage(350);
+          const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
+          if (openOtherBtn) {
+            openOtherBtn.click();
+            await sleepInPage(450);
+            const cancelBtn = findBtn(['annuler la tache'], minRightX);
+            if (cancelBtn) {
+              cancelBtn.click();
+              await sleepInPage(350);
+              const confirmCancelBtn = findBtn(['oui, annuler', 'oui annuler'], minRightX);
+              if (confirmCancelBtn) {
+                confirmCancelBtn.click();
+                await sleepInPage(450);
+              }
+            }
             continue;
           }
-        }
 
-        if (bodyNorm.includes('vous avez une autre tache en cours')) {
-          continue;
-        }
+          const confirmCancelImmediate = findBtn(['oui, annuler', 'oui annuler'], minRightX);
+          if (confirmCancelImmediate) {
+            confirmCancelImmediate.click();
+            await sleepInPage(400);
+            continue;
+          }
 
-        const rawText = document.body?.innerText || '';
-        const workerMatch = rawText.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
-        const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : 'samitodyignacegatien';
+          const nextBtn = findBtn(['tache suivante', 'next task'], minRightX);
+          if (nextBtn) {
+            nextBtn.click();
+            await sleepInPage(400);
+          }
 
-        const targetMatch = rawText.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
-        if (targetMatch && targetMatch[1]) {
-          const targetUser = targetMatch[1].replace(/\.$/, '');
-          if (targetUser.toLowerCase() !== workerHandle) {
-            const igUrl = `https://www.instagram.com/${targetUser}/`;
-            if (!ignoredSet.has(norm(igUrl))) {
-              return {
-                igUrl,
-                username: targetUser,
-                signature: igUrl.toLowerCase(),
-                title: `Abonnement sur Instagram (@${targetUser})`
-              };
+          const rightPanelText = norm(document.body?.innerText || '');
+          const hasForbiddenTaskType = forbiddenWords.some(
+            (w) => rightPanelText.includes(`${w} sur instagram`) || rightPanelText.includes(`type ${w}`)
+          );
+
+          if (hasForbiddenTaskType || !rightPanelText.includes('abonnement sur instagram')) {
+            const midRows = Array.from(document.querySelectorAll('div, li, a')).filter((el) => {
+              if (!isVis(el)) return false;
+              const r = el.getBoundingClientRect();
+              if (r.left < 260 || r.left > 930 || r.height < 40 || r.height > 115) return false;
+              const t = norm(el.innerText || '');
+              const isStrictSub = t.includes('abonnement sur instagram') && t.includes('@');
+              const isForbidden = forbiddenWords.some((fw) => t.includes(fw));
+              return isStrictSub && !isForbidden;
+            });
+
+            if (midRows.length > 0) {
+              midRows[0].click();
+              await sleepInPage(400);
+            }
+          }
+
+          const startBtn = findBtn(['commencer', 'start task'], minRightX, true);
+          if (startBtn) {
+            startBtn.click();
+            await sleepInPage(700);
+          }
+
+          const afterStartPause = detectForcedPause();
+          if (afterStartPause) return { platformPaused: true, ...afterStartPause };
+
+          const bodyNorm = norm(document.body?.innerText || '');
+
+          if (bodyNorm.includes('toutes les places sont prises') || bodyNorm.includes('tout les taches sont prises')) {
+            const nextAfterTaken = findBtn(['tache suivante'], minRightX);
+            if (nextAfterTaken) {
+              nextAfterTaken.click();
+              await sleepInPage(350);
+              continue;
+            }
+          }
+
+          if (bodyNorm.includes('vous avez une autre tache en cours')) {
+            continue;
+          }
+
+          const rawText = document.body?.innerText || '';
+          const workerMatch = rawText.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
+          const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : 'samitodyignacegatien';
+
+          const targetMatch = rawText.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
+          if (targetMatch && targetMatch[1]) {
+            const targetUser = targetMatch[1].replace(/\.$/, '');
+            if (targetUser.toLowerCase() !== workerHandle) {
+              const igUrl = `https://www.instagram.com/${targetUser}/`;
+              if (!ignoredSet.has(norm(igUrl))) {
+                return {
+                  igUrl,
+                  username: targetUser,
+                  signature: igUrl.toLowerCase(),
+                  title: `Abonnement sur Instagram (@${targetUser})`
+                };
+              }
             }
           }
         }
-      }
 
-      return { noTask: true };
-    },
-    { ignoredList: ignoredSignatures, forbiddenWords: FORBIDDEN_TASK_KEYWORDS }
-  );
+        return { noTask: true };
+      },
+      { ignoredList: ignoredSignatures, forbiddenWords: FORBIDDEN_TASK_KEYWORDS }
+    );
+  } catch (err) {
+    if (String(err.message || '').includes('Execution context was destroyed') || String(err.message || '').includes('navigation')) {
+      console.log('🔄 Changement de page détecté sur PR.SOCIAL, attente du chargement...');
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await sleep(2500);
+      return { retry: true };
+    }
+    throw err;
+  }
 }
 
 async function uploadProofToPrSocial(prPage, tempProofPath) {
   let fileSet = false;
 
-  // 1. Tenter d'abord un <input type="file"> déjà présent dans le DOM
   const existingInput = await prPage.$('input[type="file"]');
   if (existingInput) {
     await existingInput.setInputFiles(tempProofPath);
     fileSet = true;
   } else {
-    // 2. Cliquer sur le bouton orange "Ajouter une capture d'écran" en interceptant le sélecteur natif filechooser
     const uploadButtonLocator = prPage.locator('button, a, label, div').filter({
       hasText: /Ajouter une capture|Ajoutez une capture/i
     }).last();
@@ -298,7 +311,6 @@ async function uploadProofToPrSocial(prPage, tempProofPath) {
       await fileChooser.setFiles(tempProofPath);
       fileSet = true;
     } catch (_) {
-      // 3. Dernier recours : revérifier si un <input type="file"> vient d'apparaître après le clic
       const postClickInput = await prPage.$('input[type="file"]');
       if (postClickInput) {
         await postClickInput.setInputFiles(tempProofPath);
@@ -311,7 +323,6 @@ async function uploadProofToPrSocial(prPage, tempProofPath) {
     return { verified: false, reason: 'Bouton ou champ upload introuvable sur PR.SOCIAL' };
   }
 
-  // 4. Attendre la confirmation "Capture d'écran envoyée" / "En vérification" / "Tâche suivante →"
   return await prPage.evaluate(async () => {
     const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
     const norm = (s) =>
@@ -372,8 +383,8 @@ async function main() {
   await context.addCookies(cookies);
 
   const prPage = await context.newPage();
-  await prPage.goto('https://pr.social/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await sleep(2000);
+  await prPage.goto('https://pr.social/', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+  await sleep(3000);
 
   while (true) {
     if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
@@ -388,12 +399,16 @@ async function main() {
 
     const taskResult = await findAndStartNextInstagramSubscriptionTask(prPage, state.ignoredSignatures || []);
 
+    if (taskResult?.retry) {
+      continue;
+    }
+
     if (taskResult?.platformPaused) {
       const waitSec = taskResult.waitSeconds || 21 * 60;
       console.log(`⏸️ ${taskResult.reason} -> Attente automatique de ${Math.ceil(waitSec / 60)} min...`);
       await sleep(waitSec * 1000);
       await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-      await sleep(2000);
+      await sleep(2500);
       continue;
     }
 
@@ -517,7 +532,7 @@ async function main() {
         console.log('⏸️ 50 tâches réalisées ! Pause automatique de 21 minutes avant reprise autonome...');
         await sleep(21 * 60 * 1000);
         await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        await sleep(2000);
+        await sleep(2500);
         continue;
       }
 
