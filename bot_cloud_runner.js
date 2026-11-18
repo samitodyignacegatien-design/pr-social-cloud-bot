@@ -1,20 +1,6 @@
 /**
- * bot_cloud_runner.js — Robot Cloud 100% Autonome pour GitHub Actions & Serveur Cloud (Sans Clé API)
- *
- * Calibré selon vos choix :
- * 1. COMPTE UNIQUE : @samitodyignacegatien (Travailleur PR.SOCIAL : zonatody)
- * 2. FILTRE EXCLUSIF : UNIQUEMENT "Abonnement sur Instagram" (N'importe quel revenu : $0.0028, $0.0024, $0.0022...).
- *    -> Exclut formellement les tâches de commentaires, likes, signalements de compte ou autres réseaux.
- * 3. BOUCLIER ANTI-BAN HUMAIN (Stealth Shield) :
- *    - Mouvements de souris courbes (Courbes de Bézier) + vitesse variable
- *    - Micro-scrolls humains sur la galerie du profil Instagram avant de cliquer sur "Suivre"
- *    - Micro-pause de respiration humaine (25 à 45s) toutes les 12 tâches
- *    - Détection des alertes Instagram ("Action bloquée" / "Réessayez plus tard") -> mise en sécurité immédiate
- * 4. CYCLE DE 50 TÂCHES & PAUSE FORCÉE DE 20+ MINUTES :
- *    - Dès que 50 tâches sont réalisées (ou que PR.SOCIAL affiche une pause de 20+ min), le bot attend la fin exacte
- *      du temps de pause et REPREND TOUT SEUL sans aucune autorisation de votre part.
- * 5. HORAIRE AUTOMATIQUE (06h00 -> 22h00) :
- *    - Travaille toute la journée dans le Cloud (PC éteint et Internet coupé) et s'arrête automatiquement le soir à 22h00.
+ * bot_cloud_runner.js — Robot Cloud 100% Autonome pour GitHub Actions (Sans Clé API)
+ * Version corrigée : intercepteur filechooser natif Playwright + anti-boucle infinie
  */
 
 const fs = require('fs');
@@ -30,34 +16,13 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '315', 10);
-const STOP_HOUR_EVENING = parseInt(process.env.STOP_HOUR_EVENING || '22', 10); // 22h00 le soir
+const STOP_HOUR_EVENING = parseInt(process.env.STOP_HOUR_EVENING || '22', 10);
 
-// Mots-clés STRICTEMENT INTERDITS (jamais de commentaire, jamais de signalement/bannissement)
 const FORBIDDEN_TASK_KEYWORDS = [
-  'commentaire',
-  'commenter',
-  'comment',
-  'signaler',
-  'signalement',
-  'report',
-  'bannir',
-  'bloquer',
-  'like',
-  "j'aime",
-  'partager',
-  'story',
-  'vue',
-  'twitter',
-  'linkedin',
-  'tiktok',
-  'youtube',
-  'facebook',
-  'surf'
+  'commentaire', 'commenter', 'comment', 'signaler', 'signalement',
+  'report', 'bannir', 'bloquer', 'like', "j'aime", 'partager',
+  'story', 'vue', 'twitter', 'linkedin', 'tiktok', 'youtube', 'facebook', 'surf'
 ];
-
-// ============================================================================
-// 1. UTILITAIRES HUMAINS ANTI-BANNISSEMENT (COURBES DE BÉZIER & PAUSES)
-// ============================================================================
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,47 +34,26 @@ function randomBetween(min, max) {
   return Math.floor(Math.random() * (high - low + 1)) + low;
 }
 
-function normalizeText(str) {
-  return (str || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/['’`]/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Déplace la souris selon une courbe de Bézier humaine (non linéaire) avant de cliquer
- */
 async function moveMouseHumanLike(page, targetX, targetY) {
   const startX = randomBetween(180, 950);
   const startY = randomBetween(140, 620);
   const ctrlX = (startX + targetX) / 2 + randomBetween(-90, 90);
   const ctrlY = (startY + targetY) / 2 + randomBetween(-70, 70);
-  const steps = randomBetween(14, 24);
+  const steps = randomBetween(14, 22);
 
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const x = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * ctrlX + t * t * targetX);
     const y = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * ctrlY + t * t * targetY);
     await page.mouse.move(x, y);
-    await sleep(randomBetween(6, 16));
+    await sleep(randomBetween(6, 15));
   }
 }
 
-/**
- * Vérifie s'il est plus de 22h00 (heure locale configurée) pour respecter le sommeil nocturne anti-ban
- */
 function isEveningStopTimeReached() {
-  const now = new Date();
-  const hour = now.getHours();
+  const hour = new Date().getHours();
   return hour >= STOP_HOUR_EVENING || hour < 5;
 }
-
-// ============================================================================
-// 2. CHARGEMENT DE L'ÉTAT ET DES COOKIES DE SESSION
-// ============================================================================
 
 function loadBotState() {
   try {
@@ -138,14 +82,28 @@ function loadSessionCookies() {
   if (fs.existsSync(COOKIES_FILE)) {
     return JSON.parse(fs.readFileSync(COOKIES_FILE, 'utf8'));
   }
-  throw new Error(
-    'Aucun cookie trouvé. Ajoutez le secret GitHub SESSION_COOKIES_JSON ou le fichier data/session_cookies.json.'
-  );
+  throw new Error('Aucun cookie trouvé. Ajoutez le secret GitHub SESSION_COOKIES_JSON.');
 }
 
-// ============================================================================
-// 3. SÉLECTION STRICTE "ABONNEMENT SUR INSTAGRAM" (TOUS REVENUS) & AUTO-HEAL
-// ============================================================================
+async function cancelActiveTaskOnPrSocial(prPage) {
+  await prPage.evaluate(async () => {
+    const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
+    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const all = Array.from(document.querySelectorAll('button, a, div, span'));
+    const cancelBtn = all.find((el) => norm(el.innerText || '').includes('annuler la tache'));
+    if (cancelBtn) {
+      cancelBtn.click();
+      await sleepInPage(450);
+      const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span')).find((el) =>
+        norm(el.innerText || '').includes('oui, annuler')
+      );
+      if (confirmBtn) {
+        confirmBtn.click();
+        await sleepInPage(500);
+      }
+    }
+  });
+}
 
 async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures) {
   return await page.evaluate(
@@ -186,7 +144,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         return all[0] || null;
       };
 
-      // Détection de la pause de 20+ minutes imposée par PR.SOCIAL
       const detectForcedPause = () => {
         const raw = document.body?.innerText || '';
         const txt = norm(raw);
@@ -200,23 +157,12 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             return { isPaused: true, waitSeconds: mins * 60 + 40, reason: `Pause PR.SOCIAL (${mins} min)` };
           }
         }
-        const timerMatch = raw.match(/\b([0-5]?\d):([0-5]\d)\b/);
-        if (timerMatch && (txt.includes('pause') || txt.includes('limite'))) {
-          const mins = parseInt(timerMatch[1], 10) || 0;
-          const secs = parseInt(timerMatch[2], 10) || 0;
-          return {
-            isPaused: true,
-            waitSeconds: mins * 60 + secs + 30,
-            reason: `Minuteur PR.SOCIAL (${timerMatch[0]})`
-          };
-        }
         return null;
       };
 
       const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
       const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
 
-      // 1. Sélectionner le réseau "Instagram" dans la colonne de gauche
       const igNetFilter = findBtn(['instagram'], 100, true);
       if (igNetFilter && igNetFilter.getBoundingClientRect().left < 450) {
         igNetFilter.click();
@@ -227,7 +173,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         const pauseInfo = detectForcedPause();
         if (pauseInfo) return { platformPaused: true, ...pauseInfo };
 
-        // 2. Gérer "Vous avez une autre tâche en cours" -> "Ouvrir l'autre tâche" -> "Annuler la tâche" -> "Oui, annuler"
         const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
         if (openOtherBtn) {
           openOtherBtn.click();
@@ -252,22 +197,18 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           continue;
         }
 
-        // 3. Si "Tâche suivante →" est affiché, cliquer immédiatement dessus
         const nextBtn = findBtn(['tache suivante', 'next task'], minRightX);
         if (nextBtn) {
           nextBtn.click();
           await sleepInPage(400);
         }
 
-        // 4. Vérifier que la tâche affichée à droite est STRICTEMENT "Abonnement sur Instagram"
-        // (et JAMAIS un commentaire, like ou signalement !)
         const rightPanelText = norm(document.body?.innerText || '');
         const hasForbiddenTaskType = forbiddenWords.some(
           (w) => rightPanelText.includes(`${w} sur instagram`) || rightPanelText.includes(`type ${w}`)
         );
 
         if (hasForbiddenTaskType || !rightPanelText.includes('abonnement sur instagram')) {
-          // Sélectionner explicitement une ligne "Abonnement sur Instagram" dans la colonne centrale
           const midRows = Array.from(document.querySelectorAll('div, li, a')).filter((el) => {
             if (!isVis(el)) return false;
             const r = el.getBoundingClientRect();
@@ -284,11 +225,10 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           }
         }
 
-        // 5. Cliquer sur "Commencer · $..." (quel que soit le montant en $)
         const startBtn = findBtn(['commencer', 'start task'], minRightX, true);
         if (startBtn) {
           startBtn.click();
-          await sleepInPage(600);
+          await sleepInPage(700);
         }
 
         const afterStartPause = detectForcedPause();
@@ -296,11 +236,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 
         const bodyNorm = norm(document.body?.innerText || '');
 
-        // Gérer "Toutes les places sont prises" -> clic immédiat sur "Tâche suivante →"
-        if (
-          bodyNorm.includes('toutes les places sont prises') ||
-          bodyNorm.includes('tout les taches sont prises')
-        ) {
+        if (bodyNorm.includes('toutes les places sont prises') || bodyNorm.includes('tout les taches sont prises')) {
           const nextAfterTaken = findBtn(['tache suivante'], minRightX);
           if (nextAfterTaken) {
             nextAfterTaken.click();
@@ -313,14 +249,11 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           continue;
         }
 
-        // 6. Extraire le @username cible de "Abonnement sur Instagram" (en ignorant votre propre compte sous COMPTE)
         const rawText = document.body?.innerText || '';
         const workerMatch = rawText.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
         const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : 'samitodyignacegatien';
 
-        const targetMatch = rawText.match(
-          /Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i
-        );
+        const targetMatch = rawText.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
         if (targetMatch && targetMatch[1]) {
           const targetUser = targetMatch[1].replace(/\.$/, '');
           if (targetUser.toLowerCase() !== workerHandle) {
@@ -343,9 +276,72 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
   );
 }
 
-// ============================================================================
-// 4. BOUCLE PRINCIPALE DU BOT CLOUD (AVEC BOUCLIER ANTI-BAN & AUTO-PAUSE 20 MIN)
-// ============================================================================
+async function uploadProofToPrSocial(prPage, tempProofPath) {
+  let fileSet = false;
+
+  // 1. Tenter d'abord un <input type="file"> déjà présent dans le DOM
+  const existingInput = await prPage.$('input[type="file"]');
+  if (existingInput) {
+    await existingInput.setInputFiles(tempProofPath);
+    fileSet = true;
+  } else {
+    // 2. Cliquer sur le bouton orange "Ajouter une capture d'écran" en interceptant le sélecteur natif filechooser
+    const uploadButtonLocator = prPage.locator('button, a, label, div').filter({
+      hasText: /Ajouter une capture|Ajoutez une capture/i
+    }).last();
+
+    try {
+      const [fileChooser] = await Promise.all([
+        prPage.waitForEvent('filechooser', { timeout: 5000 }),
+        uploadButtonLocator.click({ force: true })
+      ]);
+      await fileChooser.setFiles(tempProofPath);
+      fileSet = true;
+    } catch (_) {
+      // 3. Dernier recours : revérifier si un <input type="file"> vient d'apparaître après le clic
+      const postClickInput = await prPage.$('input[type="file"]');
+      if (postClickInput) {
+        await postClickInput.setInputFiles(tempProofPath);
+        fileSet = true;
+      }
+    }
+  }
+
+  if (!fileSet) {
+    return { verified: false, reason: 'Bouton ou champ upload introuvable sur PR.SOCIAL' };
+  }
+
+  // 4. Attendre la confirmation "Capture d'écran envoyée" / "En vérification" / "Tâche suivante →"
+  return await prPage.evaluate(async () => {
+    const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
+    const norm = (s) =>
+      (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
+    const minRightX = Math.floor((window.innerWidth || 1366) * 0.5);
+
+    const start = Date.now();
+    while (Date.now() - start < 8000) {
+      const txt = norm(document.body?.innerText || '');
+      const hasSent =
+        txt.includes("capture d'ecran envoyee") ||
+        txt.includes('nous verifions votre capture') ||
+        txt.includes('en verification');
+      const nextBtn = Array.from(document.querySelectorAll('button, a, div')).find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left >= minRightX && norm(el.innerText || '').includes('tache suivante');
+      });
+
+      if (hasSent || nextBtn) {
+        if (nextBtn) {
+          await sleepInPage(80);
+          nextBtn.click();
+        }
+        return { verified: true };
+      }
+      await sleepInPage(150);
+    }
+    return { verified: false, reason: 'Confirmation "Capture d’écran envoyée" non détectée sous 8s' };
+  });
+}
 
 async function main() {
   console.log('================================================================');
@@ -360,18 +356,12 @@ async function main() {
 
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage'
-    ]
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage']
   });
 
   const context = await browser.newContext({
     viewport: { width: 1366, height: 820 },
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
     locale: 'fr-FR'
   });
 
@@ -386,28 +376,21 @@ async function main() {
   await sleep(2000);
 
   while (true) {
-    // 1. Vérifier si la durée maximale du relais GitHub ou l'heure de fin du soir (22h00) est atteinte
-    const elapsedMinutes = (Date.now() - startTime) / 60000;
-    if (elapsedMinutes >= MAX_RUNTIME_MINUTES) {
-      console.log(`⏱️ Fin de ce relais Cloud (${Math.round(elapsedMinutes)} min). Sauvegarde de l'état pour le relais suivant.`);
+    if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
+      console.log('⏱️ Fin du relais Cloud. Sauvegarde de l’état.');
       break;
     }
 
     if (isEveningStopTimeReached()) {
-      console.log('🌙 22h00 atteint : arrêt nocturne automatique pour protéger votre compte Instagram. Reprise demain matin à 06h00 !');
+      console.log('🌙 22h00 atteint : arrêt nocturne automatique anti-ban.');
       break;
     }
 
-    // 2. Chercher et démarrer la prochaine tâche d'abonnement Instagram
-    const taskResult = await findAndStartNextInstagramSubscriptionTask(
-      prPage,
-      state.ignoredSignatures || []
-    );
+    const taskResult = await findAndStartNextInstagramSubscriptionTask(prPage, state.ignoredSignatures || []);
 
-    // 3. Si PR.SOCIAL impose la pause de 20+ minutes : attendre et reprendre tout seul !
     if (taskResult?.platformPaused) {
       const waitSec = taskResult.waitSeconds || 21 * 60;
-      console.log(`⏸️ ${taskResult.reason} -> Attente automatique de ${Math.ceil(waitSec / 60)} min puis reprise autonome...`);
+      console.log(`⏸️ ${taskResult.reason} -> Attente automatique de ${Math.ceil(waitSec / 60)} min...`);
       await sleep(waitSec * 1000);
       await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
       await sleep(2000);
@@ -415,56 +398,36 @@ async function main() {
     }
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
-      console.log('🔍 Aucune tâche d’abonnement Instagram visible pour l’instant. Scroll & attente 8s...');
+      console.log('🔍 Aucune nouvelle tâche visible. Scroll & attente 8s...');
       await prPage.mouse.wheel(0, 500);
       await sleep(8000);
       continue;
     }
 
-    console.log(`▶️ Tâche sélectionnée : ${taskResult.title} (${taskResult.igUrl})`);
+    console.log(`▶️ Tâche sélectionnée : ${taskResult.title}`);
 
-    // 4. Ouvrir le profil Instagram avec simulation humaine anti-ban
     const igPage = await context.newPage();
     let followSuccess = false;
     let screenshotBuffer = null;
 
     try {
       await igPage.goto(taskResult.igUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-
-      // Délai de lecture humain (3.5s à 7.5s) + mouvement de souris courbe de Bézier + micro-scroll
-      await sleep(randomBetween(1800, 3400));
+      await sleep(randomBetween(1800, 3200));
       await moveMouseHumanLike(igPage, randomBetween(450, 780), randomBetween(220, 420));
-      await igPage.mouse.wheel(0, randomBetween(110, 240));
-      await sleep(randomBetween(700, 1300));
-      await igPage.mouse.wheel(0, -randomBetween(90, 180));
-      await sleep(randomBetween(1200, 2400));
+      await igPage.mouse.wheel(0, randomBetween(110, 230));
+      await sleep(randomBetween(700, 1200));
+      await igPage.mouse.wheel(0, -randomBetween(90, 170));
+      await sleep(randomBetween(1200, 2200));
 
       const igOutcome = await igPage.evaluate(async () => {
         const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-        const norm = (s) =>
-          (s || '')
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .trim();
-
+        const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
         const bodyTxt = norm(document.body?.innerText || '');
 
-        // Bouclier Anti-Ban : détecter si Instagram affiche une limite temporaire
-        if (
-          bodyTxt.includes('try again later') ||
-          bodyTxt.includes('reessayez plus tard') ||
-          bodyTxt.includes('action bloquee') ||
-          bodyTxt.includes('action blocked')
-        ) {
+        if (bodyTxt.includes('try again later') || bodyTxt.includes('reessayez plus tard') || bodyTxt.includes('action bloquee')) {
           return { status: 'IG_RATE_LIMIT' };
         }
-
-        if (
-          bodyTxt.includes("sorry, this page isn't available") ||
-          bodyTxt.includes("cette page n'est pas disponible") ||
-          bodyTxt.includes('page introuvable')
-        ) {
+        if (bodyTxt.includes("sorry, this page isn't available") || bodyTxt.includes("cette page n'est pas disponible")) {
           return { status: 'NOT_FOUND' };
         }
 
@@ -476,7 +439,6 @@ async function main() {
 
         let followBtn = null;
         let alreadyBtn = null;
-
         for (const b of buttons) {
           const t = norm(b.innerText || b.getAttribute('aria-label') || '');
           if (followLabels.includes(t) && !followBtn) followBtn = b;
@@ -487,32 +449,25 @@ async function main() {
           window.scrollTo({ top: 0 });
           return { status: 'ALREADY_FOLLOWING' };
         }
-
         if (!followBtn) return { status: 'NOT_FOUND' };
 
         followBtn.click();
-
         const start = Date.now();
         while (Date.now() - start < 6500) {
           await sleepInPage(300);
-          const currentButtons = Array.from(
-            (document.querySelector('header') || document.body).querySelectorAll('button, [role="button"]')
-          );
-          const confirmed = currentButtons.find((b) =>
-            followingLabels.includes(norm(b.innerText || b.getAttribute('aria-label') || ''))
-          );
+          const currentButtons = Array.from((document.querySelector('header') || document.body).querySelectorAll('button, [role="button"]'));
+          const confirmed = currentButtons.find((b) => followingLabels.includes(norm(b.innerText || b.getAttribute('aria-label') || '')));
           if (confirmed) {
             window.scrollTo({ top: 0 });
             await sleepInPage(300);
             return { status: 'FOLLOWED' };
           }
         }
-
         return { status: 'ERROR' };
       });
 
       if (igOutcome.status === 'IG_RATE_LIMIT') {
-        console.log('🛡️ BOUCLIER ANTI-BAN : Instagram demande de ralentir. Pause de sécurité de 60 minutes...');
+        console.log('🛡️ BOUCLIER ANTI-BAN : Pause sécurité de 60 min.');
         await igPage.close();
         await sleep(60 * 60 * 1000);
         continue;
@@ -521,95 +476,36 @@ async function main() {
       if (igOutcome.status === 'FOLLOWED' || igOutcome.status === 'ALREADY_FOLLOWING') {
         screenshotBuffer = await igPage.screenshot({ type: 'png', fullPage: false });
         followSuccess = true;
+        console.log(`📸 Capture Instagram prête (${igOutcome.status}) pour @${taskResult.username}`);
       }
     } catch (err) {
-      console.log(`⚠️ Erreur chargement Instagram (@${taskResult.username}): ${err.message}`);
+      console.log(`⚠️ Erreur Instagram (@${taskResult.username}) : ${err.message}`);
     } finally {
       if (!igPage.isClosed()) await igPage.close();
     }
 
     if (!followSuccess || !screenshotBuffer) {
-      console.log(`🔄 Annulation propre de la tâche @${taskResult.username} sur PR.SOCIAL...`);
-      await prPage.evaluate(async () => {
-        const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-        const all = Array.from(document.querySelectorAll('button, a, div, span'));
-        const cancelBtn = all.find((el) => (el.innerText || '').toLowerCase().includes('annuler la t'));
-        if (cancelBtn) {
-          cancelBtn.click();
-          await sleepInPage(400);
-          const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span')).find((el) =>
-            (el.innerText || '').toLowerCase().includes('oui, annuler')
-          );
-          if (confirmBtn) confirmBtn.click();
-        }
-      });
+      console.log(`🔄 Profil indisponible -> annulation propre de @${taskResult.username}`);
+      await cancelActiveTaskOnPrSocial(prPage);
       state.failedCount = (state.failedCount || 0) + 1;
       state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
       saveBotState(state);
-      await sleep(randomBetween(3000, 5000));
+      await sleep(randomBetween(2500, 4500));
       continue;
     }
 
-    // 5. Envoyer la capture d'écran et vérifier "Capture d'écran envoyée" + cliquer sur "Tâche suivante →"
+    console.log(`📤 Envoi de la capture sur PR.SOCIAL pour @${taskResult.username}...`);
     const tempProof = path.join(DATA_DIR, `proof_${Date.now()}.png`);
     fs.writeFileSync(tempProof, screenshotBuffer);
 
-    let verifiedUpload = false;
+    let uploadOutcome = { verified: false };
     try {
-      let fileInput = await prPage.$('input[type="file"]');
-      if (!fileInput) {
-        await prPage.evaluate(() => {
-          const box = Array.from(document.querySelectorAll('button, div, span, label')).find((el) =>
-            (el.innerText || '').toLowerCase().includes('capture d')
-          );
-          if (box) box.click();
-        });
-        await sleep(400);
-        fileInput = await prPage.$('input[type="file"]');
-      }
-
-      if (fileInput) {
-        await fileInput.setInputFiles(tempProof);
-        verifiedUpload = await prPage.evaluate(async () => {
-          const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-          const norm = (s) =>
-            (s || '')
-              .toLowerCase()
-              .normalize('NFD')
-              .replace(/[\u0300-\u036f]/g, '')
-              .replace(/['’`]/g, "'")
-              .trim();
-          const minRightX = Math.floor((window.innerWidth || 1366) * 0.5);
-
-          const start = Date.now();
-          while (Date.now() - start < 6500) {
-            const txt = norm(document.body?.innerText || '');
-            const hasSent =
-              txt.includes("capture d'ecran envoyee") ||
-              txt.includes('nous verifions votre capture') ||
-              txt.includes('en verification');
-            const nextBtn = Array.from(document.querySelectorAll('button, a, div')).find((el) => {
-              const r = el.getBoundingClientRect();
-              return r.left >= minRightX && norm(el.innerText || '').includes('tache suivante');
-            });
-
-            if (hasSent || nextBtn) {
-              if (nextBtn) {
-                await sleepInPage(60);
-                nextBtn.click();
-              }
-              return true;
-            }
-            await sleepInPage(120);
-          }
-          return false;
-        });
-      }
+      uploadOutcome = await uploadProofToPrSocial(prPage, tempProof);
     } finally {
       if (fs.existsSync(tempProof)) fs.unlinkSync(tempProof);
     }
 
-    if (verifiedUpload) {
+    if (uploadOutcome.verified) {
       state.completedCount = (state.completedCount || 0) + 1;
       state.cycleCount = (state.cycleCount || 0) + 1;
       state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
@@ -617,24 +513,28 @@ async function main() {
 
       console.log(`✅ Tâche #${state.completedCount} validée (@${taskResult.username}) | Cycle : ${state.cycleCount % 50}/50`);
 
-      // 6. Pause automatique de 21 minutes toutes les 50 tâches puis reprise 100% autonome !
       if (state.cycleCount > 0 && state.cycleCount % 50 === 0) {
-        console.log('⏸️ 50 tâches réalisées ! Pause automatique PR.SOCIAL de 21 minutes avant reprise autonome...');
+        console.log('⏸️ 50 tâches réalisées ! Pause automatique de 21 minutes avant reprise autonome...');
         await sleep(21 * 60 * 1000);
         await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
         await sleep(2000);
         continue;
       }
 
-      // 7. Micro-pause de respiration humaine (25 à 45s) toutes les 12 tâches pour ne jamais être banni
       if (state.cycleCount > 0 && state.cycleCount % 12 === 0) {
         const breatherSec = randomBetween(25, 45);
-        console.log(`☕ Micro-pause humaine anti-ban (${breatherSec}s après 12 tâches)...`);
+        console.log(`☕ Micro-pause humaine anti-ban (${breatherSec}s)...`);
         await sleep(breatherSec * 1000);
       } else {
-        const delaySec = randomBetween(5, 11);
-        await sleep(delaySec * 1000);
+        await sleep(randomBetween(5000, 11000));
       }
+    } else {
+      console.log(`❌ Échec envoi capture (@${taskResult.username}) : ${uploadOutcome.reason}. Annulation et passage à la suivante.`);
+      await cancelActiveTaskOnPrSocial(prPage);
+      state.failedCount = (state.failedCount || 0) + 1;
+      state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
+      saveBotState(state);
+      await sleep(3000);
     }
   }
 
