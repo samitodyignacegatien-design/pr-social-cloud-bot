@@ -1,7 +1,5 @@
 /**
- * bot_cloud_runner.js — Robot Cloud 100% Autonome pour GitHub Actions (Sans Clé API)
- * - Clic obligatoire sur 1 ("Ouvrez le profil et suivez-le" / www.instagr...) pour débloquer la coche verte
- * - Injection de la capture sur 2 ("Ajouter une capture d'écran") avec le moteur exact de l'extension Edge (DataTransfer + Drop + FileChooser)
+ * bot_cloud_runner.js — Robot Cloud PR.SOCIAL (Moteur identique à l'extension Edge + Logs Panneau Droit)
  */
 
 const fs = require('fs');
@@ -40,14 +38,14 @@ async function moveMouseHumanLike(page, targetX, targetY) {
   const startY = randomBetween(140, 620);
   const ctrlX = (startX + targetX) / 2 + randomBetween(-90, 90);
   const ctrlY = (startY + targetY) / 2 + randomBetween(-70, 70);
-  const steps = randomBetween(14, 22);
+  const steps = randomBetween(12, 20);
 
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const x = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * ctrlX + t * t * targetX);
     const y = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * ctrlY + t * t * targetY);
     await page.mouse.move(x, y);
-    await sleep(randomBetween(6, 15));
+    await sleep(randomBetween(6, 14));
   }
 }
 
@@ -88,89 +86,47 @@ function loadSessionCookies() {
 
 async function ensureOnInstagramTasksTab(prPage) {
   try {
-    const hasNetworksCol = await prPage.evaluate(() =>
-      (document.body?.innerText || '').includes('Réseaux')
-    );
-    if (!hasNetworksCol) {
+    if (!prPage.url().includes('/tasks')) {
       const tasksBtn = prPage.locator('a, button').filter({ hasText: /^Tâches/i }).first();
       if (await tasksBtn.count()) {
         await tasksBtn.click({ force: true }).catch(() => {});
-        await sleep(1500);
+        await sleep(1800);
+      } else {
+        await prPage.goto('https://pr.social/tasks', { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        await sleep(2000);
       }
     }
 
-    const isAllNetworksShowing = await prPage.evaluate(() => {
-      const mid = document.body?.innerText || '';
-      return mid.includes('tâches sur') && mid.includes('Tous les réseaux');
-    });
-
-    if (isAllNetworksShowing || !(await prPage.evaluate(() => (document.body?.innerText || '').includes('Abonnement sur Instagram')))) {
-      const igFilterBtn = prPage.locator('button, a, div').filter({
-        hasText: /^Instagram\s*[\d,.]*$/i
-      }).first();
-      if (await igFilterBtn.count()) {
-        await igFilterBtn.click({ force: true }).catch(() => {});
-        await sleep(1200);
-      }
-    }
-  } catch (_) {}
-}
-
-/**
- * REPÈRE 1 DU DESSIN : Clique sur "Ouvrez le profil et suivez-le" / "www.instagr..."
- * dans la colonne de droite pour valider l'étape 1 sur PR.SOCIAL (coche verte ✓)
- * et déverrouiller le bouton 2 ("Ajouter une capture d'écran").
- */
-async function clickStep1OpenProfileLinkOnPrSocial(context, prPage) {
-  try {
-    // Intercepter tout onglet popup que PR.SOCIAL ouvrirait lors du clic sur www.instagr...
-    let popupPage = null;
-    const onPageHandler = (p) => {
-      popupPage = p;
-    };
-    context.on('page', onPageHandler);
-
-    await prPage.evaluate(() => {
+    // Sélectionner le réseau "Instagram" dans la colonne Réseaux
+    await prPage.evaluate(async () => {
       const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-      const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
-
-      // Empêcher window.open de bloquer tout en laissant PR.SOCIAL exécuter son onClick React
-      const origOpen = window.open;
-      window.open = function () { return null; };
-
-      const rightElements = Array.from(document.querySelectorAll('a, button, [role="button"], div, span')).filter((el) => {
+      const simulateClick = (el) => {
+        if (!el) return;
         const r = el.getBoundingClientRect();
-        return r.left >= minRightX && r.width > 10 && r.height > 10;
-      });
+        const opts = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 };
+        el.dispatchEvent(new PointerEvent('pointerdown', opts));
+        el.dispatchEvent(new MouseEvent('mousedown', opts));
+        el.dispatchEvent(new PointerEvent('pointerup', opts));
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+        el.dispatchEvent(new MouseEvent('click', opts));
+      };
 
-      // 1. Chercher le lien ou bouton contenant "www.instagr" ou href*="instagram.com"
-      const igLinkEl = rightElements.find((el) => {
+      const candidates = Array.from(document.querySelectorAll('button, a, div, li')).filter((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < 140 || r.left > 430 || r.height < 22 || r.height > 72) return false;
         const t = norm(el.innerText || '');
-        const h = norm(el.getAttribute('href') || '');
-        return (t.includes('www.instagr') || t.includes('instagram.com') || h.includes('instagram.com')) && (el.innerText || '').length < 80;
+        return t.startsWith('instagram') && !t.includes('abonnement');
       });
 
-      if (igLinkEl) {
-        igLinkEl.click();
+      if (candidates.length > 0) {
+        const igEl = candidates[0];
+        const bg = window.getComputedStyle(igEl).backgroundColor || '';
+        if (!bg.includes('255, 255, 255')) {
+          simulateClick(igEl);
+        }
       }
-
-      // 2. Cliquer aussi sur la boîte "Ouvrez le profil et suivez-le"
-      const step1Box = rightElements.find((el) => {
-        const t = norm(el.innerText || '');
-        return t.includes('ouvrez le profil et suivez-le') && (el.innerText || '').length < 120;
-      });
-      if (step1Box) {
-        step1Box.click();
-      }
-
-      window.open = origOpen;
     });
-
-    await sleep(600);
-    context.off('page', onPageHandler);
-    if (popupPage && !popupPage.isClosed()) {
-      await popupPage.close().catch(() => {});
-    }
+    await sleep(900);
   } catch (_) {}
 }
 
@@ -179,20 +135,31 @@ async function cancelActiveTaskOnPrSocial(prPage) {
     await prPage.evaluate(async () => {
       const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
       const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const simulateClick = (el) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const opts = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 };
+        el.dispatchEvent(new PointerEvent('pointerdown', opts));
+        el.dispatchEvent(new MouseEvent('mousedown', opts));
+        el.dispatchEvent(new PointerEvent('pointerup', opts));
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+        el.dispatchEvent(new MouseEvent('click', opts));
+      };
       const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
-      const all = Array.from(document.querySelectorAll('button, a, div, span')).filter(
-        (el) => el.getBoundingClientRect().left >= minRightX
-      );
-      const cancelBtn = all.find((el) => norm(el.innerText || '').includes('annuler la tache'));
+      const findRight = (lbl) =>
+        Array.from(document.querySelectorAll('button, a, div, span'))
+          .filter((el) => el.getBoundingClientRect().left >= minRightX && (el.innerText || '').length < 40)
+          .sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99))
+          .find((el) => norm(el.innerText || '').includes(lbl));
+
+      const cancelBtn = findRight('annuler la tache');
       if (cancelBtn) {
-        cancelBtn.click();
-        await sleepInPage(450);
-        const confirmBtn = Array.from(document.querySelectorAll('button, a, div, span'))
-          .filter((el) => el.getBoundingClientRect().left >= minRightX)
-          .find((el) => norm(el.innerText || '').includes('oui, annuler'));
+        simulateClick(cancelBtn);
+        await sleepInPage(500);
+        const confirmBtn = findRight('oui, annuler') || findRight('oui annuler');
         if (confirmBtn) {
-          confirmBtn.click();
-          await sleepInPage(500);
+          simulateClick(confirmBtn);
+          await sleepInPage(600);
         }
       }
     });
@@ -223,6 +190,24 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return r.width > 4 && r.height > 4;
         };
 
+        // Le vrai simulateRealisticClick de notre extension Edge !
+        const simulateRealisticClick = (el) => {
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          const clientX = Math.round(r.left + Math.max(2, r.width / 2));
+          const clientY = Math.round(r.top + Math.max(2, r.height / 2));
+          const opts = { bubbles: true, cancelable: true, composed: true, view: window, clientX, clientY, button: 0, buttons: 1 };
+          el.dispatchEvent(new PointerEvent('pointerover', opts));
+          el.dispatchEvent(new MouseEvent('mouseover', opts));
+          el.dispatchEvent(new PointerEvent('pointerdown', opts));
+          el.dispatchEvent(new MouseEvent('mousedown', opts));
+          if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+          el.dispatchEvent(new PointerEvent('pointerup', opts));
+          el.dispatchEvent(new MouseEvent('mouseup', opts));
+          el.dispatchEvent(new MouseEvent('click', opts));
+          return true;
+        };
+
         const findBtn = (labels, minLeft = 0, exactPrefix = false) => {
           const targets = labels.map(norm);
           const all = Array.from(
@@ -237,7 +222,12 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
               ? targets.some((t) => txt === t || txt.startsWith(t))
               : targets.some((t) => txt.includes(t));
           });
-          all.sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99));
+          all.sort((a, b) => {
+            const aBtn = ['BUTTON', 'A'].includes(a.tagName) ? 0 : 1;
+            const bBtn = ['BUTTON', 'A'].includes(b.tagName) ? 0 : 1;
+            if (aBtn !== bBtn) return aBtn - bBtn;
+            return (a.innerText?.length || 99) - (b.innerText?.length || 99);
+          });
           return all[0] || null;
         };
 
@@ -251,22 +241,6 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return panels[0] ? panels[0].innerText || '' : '';
         };
 
-        const detectForcedPause = () => {
-          const raw = document.body?.innerText || '';
-          const txt = norm(raw);
-          const pauseWords = ['pause', 'limite atteinte', 'trop de taches', 'attendez', 'patienter', 'reessayez dans'];
-          if (!pauseWords.some((w) => txt.includes(w))) return null;
-
-          const minMatch = txt.match(/(\d{1,3})\s*(?:minute|minutes|min|mn)\b/i);
-          if (minMatch) {
-            const mins = parseInt(minMatch[1], 10);
-            if (mins >= 1 && mins <= 240) {
-              return { isPaused: true, waitSeconds: mins * 60 + 40, reason: `Pause PR.SOCIAL (${mins} min)` };
-            }
-          }
-          return null;
-        };
-
         const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
         const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
 
@@ -274,7 +248,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           const midRows = Array.from(document.querySelectorAll('div, li, a, button')).filter((el) => {
             if (!isVis(el)) return false;
             const r = el.getBoundingClientRect();
-            if (r.left < 200 || r.left > minRightX - 10 || r.height < 36 || r.height > 130 || r.width < 150) return false;
+            if (r.left < 220 || r.left > minRightX - 10 || r.height < 38 || r.height > 125 || r.width < 160) return false;
             const t = norm(el.innerText || '');
             const isStrictSub = t.includes('abonnement sur instagram') && t.includes('@');
             const isForbidden = forbiddenWords.some((fw) => t.includes(fw));
@@ -287,8 +261,8 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
               const handle = m[1].replace(/\.$/, '').toLowerCase();
               const url = `https://www.instagram.com/${handle}/`;
               if (!ignoredSet.has(norm(url))) {
-                row.click();
-                await sleepInPage(500);
+                simulateRealisticClick(row);
+                await sleepInPage(600);
                 return true;
               }
             }
@@ -297,21 +271,18 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
         };
 
         for (let cycle = 0; cycle < 6; cycle++) {
-          const pauseInfo = detectForcedPause();
-          if (pauseInfo) return { platformPaused: true, ...pauseInfo };
-
           const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
           if (openOtherBtn) {
-            openOtherBtn.click();
-            await sleepInPage(450);
+            simulateRealisticClick(openOtherBtn);
+            await sleepInPage(550);
             const cancelBtn = findBtn(['annuler la tache'], minRightX);
             if (cancelBtn) {
-              cancelBtn.click();
-              await sleepInPage(350);
+              simulateRealisticClick(cancelBtn);
+              await sleepInPage(450);
               const confirmCancelBtn = findBtn(['oui, annuler', 'oui annuler'], minRightX);
               if (confirmCancelBtn) {
-                confirmCancelBtn.click();
-                await sleepInPage(450);
+                simulateRealisticClick(confirmCancelBtn);
+                await sleepInPage(550);
               }
             }
             continue;
@@ -319,15 +290,15 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 
           const confirmCancelImmediate = findBtn(['oui, annuler', 'oui annuler'], minRightX);
           if (confirmCancelImmediate) {
-            confirmCancelImmediate.click();
-            await sleepInPage(400);
+            simulateRealisticClick(confirmCancelImmediate);
+            await sleepInPage(450);
             continue;
           }
 
           const nextBtn = findBtn(['tache suivante', 'next task'], minRightX);
           if (nextBtn) {
-            nextBtn.click();
-            await sleepInPage(450);
+            simulateRealisticClick(nextBtn);
+            await sleepInPage(550);
           }
 
           let rightRaw = getRightPanelText(minRightX);
@@ -354,12 +325,9 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 
           const startBtn = findBtn(['commencer', 'start task'], minRightX, true);
           if (startBtn) {
-            startBtn.click();
-            await sleepInPage(800);
+            simulateRealisticClick(startBtn);
+            await sleepInPage(1100);
           }
-
-          const afterStartPause = detectForcedPause();
-          if (afterStartPause) return { platformPaused: true, ...afterStartPause };
 
           const postStartRaw = getRightPanelText(minRightX);
           const postStartNorm = norm(postStartRaw);
@@ -367,8 +335,8 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           if (postStartNorm.includes('toutes les places sont prises') || postStartNorm.includes('tout les taches sont prises')) {
             const nextAfterTaken = findBtn(['tache suivante'], minRightX);
             if (nextAfterTaken) {
-              nextAfterTaken.click();
-              await sleepInPage(350);
+              simulateRealisticClick(nextAfterTaken);
+              await sleepInPage(450);
             } else {
               await clickNextNonIgnoredMiddleRow();
             }
@@ -379,8 +347,14 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             continue;
           }
 
+          // Vérifier que la tâche est bien passée à l'état "En cours" (ou que "Annuler la tâche" est visible)
+          const isTaskStarted =
+            postStartNorm.includes('en cours') ||
+            postStartNorm.includes('annuler la tache') ||
+            postStartNorm.includes('www.instagr');
+
           const finalMatch = postStartRaw.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
-          if (finalMatch && finalMatch[1]) {
+          if (isTaskStarted && finalMatch && finalMatch[1]) {
             const targetUser = finalMatch[1].replace(/\.$/, '');
             if (targetUser.toLowerCase() !== workerHandle) {
               const igUrl = `https://www.instagram.com/${targetUser}/`;
@@ -396,7 +370,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           }
         }
 
-        const preview = (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+        const preview = getRightPanelText(minRightX).replace(/\s+/g, ' ').trim().slice(0, 160);
         return { noTask: true, preview };
       },
       { ignoredList: ignoredSignatures, forbiddenWords: FORBIDDEN_TASK_KEYWORDS }
@@ -412,20 +386,127 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 }
 
 /**
- * REPÈRE 2 DU DESSIN : Envoie la capture dans "Ajouter une capture d'écran"
- * en utilisant à la fois la méthode DataTransfer/Drop de notre extension Edge ET le filechooser Playwright.
+ * Clic réel sur la boîte 1 ("Ouvrez le profil et suivez-le" / "www.instagr...")
+ * en laissant le vrai événement se produire (et en fermant tout onglet popup secondaire)
+ */
+async function clickStep1OpenProfileBox(context, prPage) {
+  let popupOpened = null;
+  const onNewPage = (p) => { popupOpened = p; };
+  context.on('page', onNewPage);
+
+  try {
+    const coords = await prPage.evaluate(() => {
+      const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
+      const els = Array.from(document.querySelectorAll('a, button, [role="button"], div, span')).filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left >= minRightX && r.width > 15 && r.height > 15 && (el.innerText || '').length < 80;
+      });
+      const target =
+        els.find((el) => norm(el.innerText || '').includes('www.instagr')) ||
+        els.find((el) => norm(el.innerText || '').includes('ouvrez le profil et suivez-le'));
+      if (!target) return null;
+      const r = target.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: (target.innerText || '').trim() };
+    });
+
+    if (coords) {
+      await prPage.mouse.click(coords.x, coords.y);
+      await sleep(700);
+    }
+  } catch (_) {}
+
+  context.off('page', onNewPage);
+  if (popupOpened && !popupOpened.isClosed()) {
+    await popupOpened.close().catch(() => {});
+  }
+}
+
+/**
+ * Envoi de la capture sur le bouton 2 ("Ajouter une capture d'écran") :
+ * 1. Affiche le diagnostic du panneau droit avant l'upload
+ * 2. Intercepte `filechooser` dès le PREMIER vrai clic souris sur "Ajouter une capture d'écran"
+ * 3. Injecte aussi via DataTransfer + HTMLInputElement.prototype.files (exactement comme l'extension Edge)
+ * 4. Clique sur tout bouton de validation éventuel et affiche le diagnostic après l'upload
  */
 async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
-  const base64DataUrl = `data:image/png;base64,${screenshotBuffer.toString('base64')}`;
+  await prPage.bringToFront().catch(() => {});
+  await sleep(400);
 
-  // Méthode A : Injection directe dans le DOM via DataTransfer + HTMLInputElement.prototype.files + Drag & Drop (comme dans l'extension Edge)
-  const domInjected = await prPage.evaluate(async (dataUrl) => {
-    const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-    const norm = (s) =>
-      (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
+  // Diagnostic AVANT upload
+  const preDiag = await prPage.evaluate(() => {
+    const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]')).length;
+    const btns = Array.from(document.querySelectorAll('button, label, a, [role="button"]'))
+      .filter((el) => el.getBoundingClientRect().left >= minRightX)
+      .map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    return { inputs, btns: btns.slice(0, 8) };
+  });
+  console.log(`📋 Panneau droit avant upload -> inputs=${preDiag.inputs} | boutons=${JSON.stringify(preDiag.btns)}`);
+
+  let fileUploadedViaChooser = false;
+
+  // Étape 1 : Si un <input type="file"> existe déjà dans le DOM, lui passer le fichier directement
+  const directInputs = await prPage.$$('input[type="file"]');
+  if (directInputs.length > 0) {
+    for (const inp of directInputs) {
+      await inp.setInputFiles(tempProofPath).catch(() => {});
+    }
+    fileUploadedViaChooser = true;
+    console.log(`📎 Fichier injecté dans ${directInputs.length} <input type="file"> existant(s)`);
+  }
+
+  // Étape 2 : Trouver les coordonnées exactes du bouton "Ajouter une capture d'écran" et cliquer dessus en écoutant filechooser
+  const uploadBtnCoords = await prPage.evaluate(() => {
+    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
+    const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
+    const candidates = Array.from(document.querySelectorAll('button, label, [role="button"], div, span')).filter((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.left < minRightX || r.width < 30 || r.height < 20) return false;
+      const t = norm(el.innerText || '');
+      return (t.includes("ajouter une capture d'ecran") || t.includes("ajoutez une capture d'ecran")) && t.length < 60;
+    });
+    candidates.sort((a, b) => {
+      const aBtn = ['BUTTON', 'LABEL'].includes(a.tagName) ? 0 : 1;
+      const bBtn = ['BUTTON', 'LABEL'].includes(b.tagName) ? 0 : 1;
+      if (aBtn !== bBtn) return aBtn - bBtn;
+      return (a.innerText?.length || 99) - (b.innerText?.length || 99);
+    });
+    const best = candidates[0];
+    if (!best) return null;
+    const r = best.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), tag: best.tagName, text: (best.innerText || '').trim() };
+  });
+
+  if (uploadBtnCoords && !fileUploadedViaChooser) {
+    try {
+      const [fileChooser] = await Promise.all([
+        prPage.waitForEvent('filechooser', { timeout: 4000 }),
+        prPage.mouse.click(uploadBtnCoords.x, uploadBtnCoords.y)
+      ]);
+      await fileChooser.setFiles(tempProofPath);
+      fileUploadedViaChooser = true;
+      console.log(`📎 Fichier injecté via FileChooser natif après clic sur <${uploadBtnCoords.tag}> "${uploadBtnCoords.text}"`);
+    } catch (_) {
+      // Vérifier si le clic a fait apparaître un <input type="file"> dans le DOM
+      const newInputs = await prPage.$$('input[type="file"]');
+      if (newInputs.length > 0) {
+        for (const inp of newInputs) {
+          await inp.setInputFiles(tempProofPath).catch(() => {});
+        }
+        fileUploadedViaChooser = true;
+        console.log(`📎 Fichier injecté dans <input type="file"> apparu après clic`);
+      }
+    }
+  }
+
+  // Étape 3 : Exécuter AUSSI l'injection DataTransfer + Drag & Drop exacte de content_platform.js (notre extension Edge)
+  const base64DataUrl = `data:image/png;base64,${screenshotBuffer.toString('base64')}`;
+  await prPage.evaluate(async (dataUrl) => {
+    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
     const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
 
-    // Convertir le Base64 en objet File
     const parts = dataUrl.split(',');
     const bstr = atob(parts[1]);
     const u8 = new Uint8Array(bstr.length);
@@ -435,125 +516,72 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
       lastModified: Date.now()
     });
 
-    // Recherche profonde de <input type="file"> (DOM + shadowRoot)
-    const findInputsDeep = (root = document) => {
-      const found = [];
-      const walk = (node) => {
-        if (!node) return;
-        const els = node.querySelectorAll ? node.querySelectorAll('*') : [];
-        for (const el of els) {
-          if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'file') found.push(el);
-          if (el.shadowRoot) walk(el.shadowRoot);
-        }
-      };
-      walk(root);
-      return found;
-    };
+    const dt = new DataTransfer();
+    dt.items.add(file);
 
-    let inputs = findInputsDeep();
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+    for (const inp of inputs) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'files')?.set;
+      if (setter) setter.call(inp, dt.files);
+      else inp.files = dt.files;
+      inp.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }
 
-    // Trouver le bouton orange 2 ("Ajouter une capture d'écran")
-    const rightCandidates = Array.from(document.querySelectorAll('button, label, a, [role="button"], div, span')).filter((el) => {
+    const zones = Array.from(document.querySelectorAll('button, label, div')).filter((el) => {
       const r = el.getBoundingClientRect();
-      if (r.left < minRightX || r.width < 20 || r.height < 18) return false;
+      if (r.left < minRightX || r.width < 30 || r.height < 20) return false;
       const t = norm(el.innerText || '');
-      return (t.includes("ajouter une capture d'ecran") || t.includes("ajoutez une capture d'ecran")) && t.length < 85;
+      return t.includes("capture d'ecran") && t.length < 120;
     });
-    rightCandidates.sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99));
-    const uploadBtn = rightCandidates[0] || null;
 
-    // Si aucun <input type="file"> n'existe encore, intercepter la création d'un input hors-DOM (input = document.createElement('input'))
-    let interceptedDynamicInput = null;
-    const origClick = HTMLElement.prototype.click;
-    HTMLElement.prototype.click = function (...args) {
-      if (this.tagName === 'INPUT' && (this.type || '').toLowerCase() === 'file') {
-        interceptedDynamicInput = this;
-        return;
-      }
-      return origClick.apply(this, args);
-    };
-
-    if (inputs.length === 0 && uploadBtn) {
-      uploadBtn.click();
-      await sleepInPage(400);
-      inputs = findInputsDeep();
-    }
-
-    HTMLElement.prototype.click = origClick;
-
-    const targetInput = interceptedDynamicInput || inputs[inputs.length - 1] || null;
-    let injected = false;
-
-    if (targetInput) {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'files')?.set;
-      if (nativeSetter) nativeSetter.call(targetInput, dt.files);
-      else targetInput.files = dt.files;
-
-      targetInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      targetInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-      injected = true;
-    }
-
-    // Simuler aussi le Drag & Drop directement sur la boîte/bouton "Ajouter une capture d'écran"
-    if (uploadBtn) {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      const rect = uploadBtn.getBoundingClientRect();
-      for (const evtName of ['dragenter', 'dragover', 'drop']) {
-        uploadBtn.dispatchEvent(
-          new DragEvent(evtName, {
+    for (const z of zones) {
+      const r = z.getBoundingClientRect();
+      for (const type of ['dragenter', 'dragover', 'drop']) {
+        z.dispatchEvent(
+          new DragEvent(type, {
             bubbles: true,
             cancelable: true,
             composed: true,
-            clientX: Math.round(rect.left + rect.width / 2),
-            clientY: Math.round(rect.top + rect.height / 2),
+            clientX: Math.round(r.left + r.width / 2),
+            clientY: Math.round(r.top + r.height / 2),
             dataTransfer: dt
           })
         );
       }
-      injected = true;
     }
-
-    return injected;
   }, base64DataUrl);
 
-  // Méthode B : En complément, tenter le filechooser natif Playwright si la confirmation n'est pas immédiate
-  await sleep(700);
-  const alreadyConfirmed = await prPage.evaluate(() => {
-    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
-    const txt = norm(document.body?.innerText || '');
-    return txt.includes("capture d'ecran envoyee") || txt.includes('en verification') || txt.includes('tache suivante');
-  });
-
-  if (!alreadyConfirmed) {
-    try {
-      const anyInput = await prPage.$('input[type="file"]');
-      if (anyInput) {
-        await anyInput.setInputFiles(tempProofPath);
-      } else {
-        const uploadLocator = prPage.locator('button, label, div').filter({
-          hasText: /Ajouter une capture|Ajoutez une capture/i
-        }).last();
-        const [fc] = await Promise.all([
-          prPage.waitForEvent('filechooser', { timeout: 3500 }),
-          uploadLocator.click({ force: true })
-        ]);
-        await fc.setFiles(tempProofPath);
-      }
-    } catch (_) {}
-  }
-
-  // Attendre la confirmation "Capture d'écran envoyée" / "En vérification" / "Tâche suivante →"
-  return await prPage.evaluate(async (wasInjected) => {
+  // Étape 4 : Attendre la confirmation (et cliquer sur tout bouton Envoyer/Valider s'il apparaît)
+  const verifyResult = await prPage.evaluate(async () => {
     const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
-    const norm = (s) =>
-      (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
-    const minRightX = Math.floor((window.innerWidth || 1366) * 0.5);
+    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").trim();
+    const minRightX = Math.floor((window.innerWidth || 1366) * 0.52);
+
+    const simulateRealisticClick = (el) => {
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const opts = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.dispatchEvent(new MouseEvent('click', opts));
+    };
 
     const start = Date.now();
-    while (Date.now() - start < 8500) {
+    while (Date.now() - start < 9000) {
+      // S'il y a un bouton "Envoyer" / "Valider" / "Soumettre" / "Vérifier", cliquer dessus
+      const submitBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < minRightX || r.width < 20) return false;
+        const t = norm(el.innerText || '');
+        return ['envoyer', 'valider', 'soumettre', 'confirmer', 'verifier'].some((w) => t === w || t.startsWith(w));
+      });
+      if (submitBtn) {
+        simulateRealisticClick(submitBtn);
+      }
+
       const txt = norm(document.body?.innerText || '');
       const hasSent =
         txt.includes("capture d'ecran envoyee") ||
@@ -567,19 +595,31 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
       if (hasSent || nextBtn) {
         if (nextBtn) {
           await sleepInPage(80);
-          nextBtn.click();
+          simulateRealisticClick(nextBtn);
         }
         return { verified: true };
       }
-      await sleepInPage(150);
+      await sleepInPage(200);
     }
-    return {
-      verified: false,
-      reason: wasInjected
-        ? 'Fichier injecté mais PR.SOCIAL n’a pas affiché "Capture d’écran envoyée"'
-        : 'Bouton "Ajouter une capture d’écran" introuvable'
-    };
-  }, domInjected);
+
+    const panels = Array.from(document.querySelectorAll('div, aside, section')).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.left >= minRightX && r.width > 200 && r.height > 200;
+    });
+    panels.sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height);
+    const afterText = (panels[0]?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+
+    return { verified: false, afterText };
+  });
+
+  if (!verifyResult.verified) {
+    console.log(`📋 Panneau droit APRÈS upload : "${verifyResult.afterText}"`);
+  }
+
+  return {
+    verified: verifyResult.verified,
+    reason: verifyResult.verified ? 'OK' : `Non confirmé (Texte panneau droit: ${verifyResult.afterText})`
+  };
 }
 
 async function main() {
@@ -611,7 +651,7 @@ async function main() {
   await context.addCookies(cookies);
 
   const prPage = await context.newPage();
-  await prPage.goto('https://pr.social/', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+  await prPage.goto('https://pr.social/tasks', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
   await sleep(3000);
 
   let emptyRetries = 0;
@@ -642,9 +682,9 @@ async function main() {
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
       emptyRetries += 1;
-      console.log(`🔍 Aucune tâche (${emptyRetries}/3) | URL: ${prPage.url()}`);
+      console.log(`🔍 Aucune tâche (${emptyRetries}/3) | Panneau: ${taskResult?.preview || 'vide'}`);
       await prPage.mouse.wheel(0, 500);
-      await sleep(6000);
+      await sleep(5000);
       if (emptyRetries >= 3) {
         emptyRetries = 0;
         await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
@@ -656,8 +696,7 @@ async function main() {
     emptyRetries = 0;
     console.log(`▶️ Tâche sélectionnée : ${taskResult.title}`);
 
-    // REPÈRE 1 : Cliquer sur la boîte 1 ("Ouvrez le profil et suivez-le" / www.instagr...) sur PR.SOCIAL
-    await clickStep1OpenProfileLinkOnPrSocial(context, prPage);
+    await clickStep1OpenProfileBox(context, prPage);
 
     const igPage = await context.newPage();
     let followSuccess = false;
@@ -747,7 +786,6 @@ async function main() {
       continue;
     }
 
-    // REPÈRE 2 : Envoyer la capture sur le bouton 2 ("Ajouter une capture d'écran")
     console.log(`📤 Envoi de la capture sur PR.SOCIAL pour @${taskResult.username}...`);
     const tempProof = path.join(DATA_DIR, `proof_${Date.now()}.png`);
     fs.writeFileSync(tempProof, screenshotBuffer);
@@ -783,7 +821,7 @@ async function main() {
         await sleep(randomBetween(5000, 11000));
       }
     } else {
-      console.log(`❌ Échec envoi capture (@${taskResult.username}) : ${uploadOutcome.reason}. Annulation et passage à la suivante.`);
+      console.log(`❌ Échec envoi capture (@${taskResult.username}) : ${uploadOutcome.reason}`);
       await cancelActiveTaskOnPrSocial(prPage);
       state.failedCount = (state.failedCount || 0) + 1;
       state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
