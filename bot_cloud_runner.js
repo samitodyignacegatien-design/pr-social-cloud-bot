@@ -1,5 +1,7 @@
 /**
- * bot_cloud_runner.js — Robot Cloud 24h/24 Eco-Quota (avec rechargement auto avant arrêt)
+ * bot_cloud_runner.js — Robot Cloud 24h/24 avec Pause Automatique de 35 min & Reprise Garantie
+ * Dès que PR.SOCIAL demande une pause, le robot attend 35 minutes (ou plus si PR.SOCIAL affiche > 35 min),
+ * recharge PR.SOCIAL et reprend les tâches tout seul sans s'éteindre.
  */
 
 const fs = require('fs');
@@ -14,7 +16,8 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '50', 10);
+const MAX_RUNTIME_MINUTES = parseInt(process.env.MAX_RUNTIME_MINUTES || '310', 10);
+const MIN_PAUSE_MINUTES = 35;
 
 const FORBIDDEN_TASK_KEYWORDS = [
   'commentaire', 'commenter', 'comment', 'signaler', 'signalement',
@@ -232,7 +235,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           return panels[0] ? panels[0].innerText || '' : '';
         };
 
-        const detectForcedPause = (panelRaw) => {
+        const detectPlatformPause = (panelRaw) => {
           const raw = panelRaw || document.body?.innerText || '';
           const txt = norm(raw);
           const pauseWords = [
@@ -255,7 +258,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
             return { isPaused: true, minutes: mins, reason: `Minuteur PR.SOCIAL (${timerMatch[0]})` };
           }
 
-          return { isPaused: true, minutes: 20, reason: 'Pause suggérée par PR.SOCIAL' };
+          return { isPaused: true, minutes: 35, reason: 'Pause demandée par PR.SOCIAL' };
         };
 
         const ignoredSet = new Set((ignoredList || []).map((s) => norm(s)));
@@ -289,7 +292,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
 
         for (let cycle = 0; cycle < 6; cycle++) {
           const rightPanelNow = getRightPanelText(minRightX);
-          const pauseInfo = detectForcedPause(rightPanelNow);
+          const pauseInfo = detectPlatformPause(rightPanelNow);
           if (pauseInfo) return { platformPaused: true, ...pauseInfo };
 
           const openOtherBtn = findBtn(["ouvrir l'autre tache"], minRightX);
@@ -351,7 +354,7 @@ async function findAndStartNextInstagramSubscriptionTask(page, ignoredSignatures
           }
 
           const postStartRaw = getRightPanelText(minRightX);
-          const afterStartPause = detectForcedPause(postStartRaw);
+          const afterStartPause = detectPlatformPause(postStartRaw);
           if (afterStartPause) return { platformPaused: true, ...afterStartPause };
 
           const postStartNorm = norm(postStartRaw);
@@ -602,7 +605,7 @@ async function uploadProofToPrSocial(prPage, screenshotBuffer, tempProofPath) {
 
 async function main() {
   console.log('================================================================');
-  console.log('🚀 Bot Cloud PR.SOCIAL 24h/24 (Rechargement auto avant arrêt)');
+  console.log('🚀 Bot Cloud PR.SOCIAL 24h/24 (Pause auto 35 min + Reprise directe)');
   console.log('🎯 Compte @samitodyignacegatien | Abonnements IG uniquement');
   console.log('================================================================');
 
@@ -635,7 +638,7 @@ async function main() {
 
   while (true) {
     if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
-      console.log('⏱️ Fin de session (50 min). Passage au prochain réveil cron.');
+      console.log('⏱️ Fin du relais de 5h10. Sauvegarde de l’état pour le relais suivant.');
       break;
     }
 
@@ -643,30 +646,30 @@ async function main() {
 
     if (taskResult?.retry) continue;
 
+    // Dès que PR.SOCIAL demande une pause : attendre au minimum 35 min (ou plus si PR.SOCIAL affiche > 35 min), puis reprendre tout seul !
     if (taskResult?.platformPaused) {
-      const mins = taskResult.minutes || 20;
-      if (mins <= 5) {
-        console.log(`⏳ ${taskResult.reason} (<= 5 min) -> Attente exacte de ${mins} min sur place avant reprise...`);
-        await sleep((mins * 60 + 20) * 1000);
-        await prPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        await sleep(2500);
-        continue;
-      } else {
-        console.log(`⏸️ ${taskResult.reason} (> 5 min) -> Extinction immédiate pour économiser le quota GitHub. Reprise automatique au prochain réveil !`);
-        break;
-      }
+      const waitMins = Math.max(MIN_PAUSE_MINUTES, taskResult.minutes || MIN_PAUSE_MINUTES);
+      console.log(`⏸️ ${taskResult.reason} -> Pause automatique de ${waitMins} minutes en cours. Le bot va se rallumer tout seul ensuite !`);
+      await sleep(waitMins * 60 * 1000);
+      console.log(`⚡ Fin des ${waitMins} minutes de pause ! Reprise automatique des tâches...`);
+      await prPage.goto('https://pr.social/tasks', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+      await sleep(3000);
+      continue;
     }
 
     if (taskResult?.noTask || !taskResult?.igUrl) {
       emptyRetries += 1;
       console.log(`🔍 Aucune tâche visible (${emptyRetries}/6)`);
       if (emptyRetries === 3) {
-        console.log('🔄 Rechargement complet de la page PR.SOCIAL pour actualiser la liste...');
+        console.log('🔄 Rechargement complet de la page PR.SOCIAL...');
         await prPage.reload({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {});
         await sleep(3000);
       } else if (emptyRetries >= 6) {
-        console.log('🛑 Liste vraiment vide même après rechargement -> Extinction pour économiser le quota.');
-        break;
+        console.log('⏳ Liste vide : attente 5 minutes puis nouvelle vérification automatique...');
+        emptyRetries = 0;
+        await sleep(5 * 60 * 1000);
+        await prPage.reload({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {});
+        await sleep(3000);
       } else {
         await prPage.mouse.move(600, 450);
         await prPage.mouse.wheel(0, 500);
@@ -741,9 +744,10 @@ async function main() {
       });
 
       if (igOutcome.status === 'IG_RATE_LIMIT') {
-        console.log('🛡️ BOUCLIER ANTI-BAN : Instagram demande de ralentir -> Extinction immédiate jusqu’au prochain réveil.');
+        console.log('🛡️ BOUCLIER ANTI-BAN : Instagram demande de ralentir -> Pause de 35 minutes puis reprise...');
         await igPage.close();
-        break;
+        await sleep(35 * 60 * 1000);
+        continue;
       }
 
       if (igOutcome.status === 'FOLLOWED' || igOutcome.status === 'ALREADY_FOLLOWING') {
