@@ -1,13 +1,9 @@
-name: PR.SOCIAL Stealth IG Bot (24h/24 Eco-Quota)
+name: PR.SOCIAL Stealth IG Bot (Auto-Reprise 35 min)
 
 on:
   workflow_dispatch:
   schedule:
-    # Relais automatique toutes les 45 minutes, 24h/24 (00:00, 00:45, 01:30, 02:15, etc.)
-    - cron: "0 0,3,6,9,12,15,18,21 * * *"
-    - cron: "45 0,3,6,9,12,15,18,21 * * *"
-    - cron: "30 1,4,7,10,13,16,19,22 * * *"
-    - cron: "15 2,5,8,11,14,17,20,23 * * *"
+    - cron: "0 */5 * * *"
 
 concurrency:
   group: pr-social-mono-account-samitodyignacegatien
@@ -16,7 +12,7 @@ concurrency:
 jobs:
   run-stealth-ig-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 330
 
     steps:
       - name: 1. Recuperation du code du Bot Cloud
@@ -40,16 +36,16 @@ jobs:
           restore-keys: |
             pr-social-state-
 
-      - name: 5. Execution autonome du Bot (24h/24, Abonnements IG, Arret sur Pause 50 taches)
+      - name: 5. Execution autonome du Bot (Pause 35 min + Reprise automatique)
         env:
           SESSION_COOKIES_JSON: ${{ secrets.SESSION_COOKIES_JSON }}
-          MAX_RUNTIME_MINUTES: "40"
+          MAX_RUNTIME_MINUTES: "310"
           IG_WORKER_USERNAME: "samitodyignacegatien"
           PR_WORKER_USERNAME: "zonatody"
           TZ: "Indian/Antananarivo"
         run: node bot_cloud_runner.js
 
-      - name: 6. Sauvegarde de l'etat pour le prochain reveil
+      - name: 6. Sauvegarde de l'etat pour le prochain relais
         if: always()
         uses: actions/cache/save@v4
         with:
