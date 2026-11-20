@@ -1,5 +1,5 @@
 /**
- * bot_cloud_runner.js — Robot Cloud PR.SOCIAL (Nouvelle version SANS capture d'écran : bouton "Confirmer")
+ * bot_cloud_runner.js — Robot Cloud PR.SOCIAL (Version SANS capture d'écran : bouton "Confirmer")
  * - Filtre strict Abonnements Instagram uniquement
  * - Vérifie que le suivi passe à "Suivi(e)" / "Following" / "Demandé" sur Instagram
  * - Clique directement sur "Confirmer" sur PR.SOCIAL puis sur "Tâche suivante →"
@@ -447,16 +447,10 @@ async function clickStep1OpenProfileBox(context, prPage) {
   }
 }
 
-/**
- * NOUVELLE MÉTHODE OFFICIELLE PR.SOCIAL (SANS CAPTURE D'ÉCRAN) :
- * Clique sur le bouton "Confirmer" dans la colonne de droite, attend la validation
- * ("En vérification" / "Tâche suivante →") et enchaîne immédiatement sur "Tâche suivante →".
- */
 async function confirmTaskWithoutScreenshotOnPrSocial(prPage) {
   await prPage.bringToFront().catch(() => {});
   await sleep(300);
 
-  // 1. Trouver et cliquer sur le bouton "Confirmer" (ou "Confirm") avec un vrai clic souris Playwright
   const confirmCoords = await prPage.evaluate(() => {
     const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
@@ -465,3 +459,10 @@ async function confirmTaskWithoutScreenshotOnPrSocial(prPage) {
       if (r.left < minRightX || r.width < 30 || r.height < 20) return false;
       const t = norm(el.innerText || '');
       return t === 'confirmer' || t === 'confirm' || t.startsWith('confirmer ');
+    });
+    candidates.sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99));
+    const best = candidates[0];
+    if (!best) return null;
+    best.scrollIntoView({ behavior: 'instant', block: 'center' });
+    const r = best.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: 
