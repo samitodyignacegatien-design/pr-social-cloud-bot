@@ -464,4 +464,4 @@ async function confirmTaskWithoutScreenshotOnPrSocial(prPage) {
       const r = el.getBoundingClientRect();
       if (r.left < minRightX || r.width < 30 || r.height < 20) return false;
       const t = norm(el.innerText || '');
-      return t === 'confirmer' || t === 'confirm' || t.startsWith('confirmer '
+      return t === 'confirmer' || t === 'confirm' || t.startsWith('confirmer ');
