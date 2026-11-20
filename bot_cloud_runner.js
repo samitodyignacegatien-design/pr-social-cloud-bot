@@ -465,4 +465,249 @@ async function confirmTaskWithoutScreenshotOnPrSocial(prPage) {
     if (!best) return null;
     best.scrollIntoView({ behavior: 'instant', block: 'center' });
     const r = best.getBoundingClientRect();
-    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: 
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: (best.innerText || '').trim() };
+  });
+
+  if (!confirmCoords) {
+    return { verified: false, reason: 'Bouton « Confirmer » introuvable dans le panneau droit' };
+  }
+
+  await prPage.mouse.click(confirmCoords.x, confirmCoords.y);
+
+  return await prPage.evaluate(async () => {
+    const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
+    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
+
+    const simulateRealisticClick = (el) => {
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const opts = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.dispatchEvent(new MouseEvent('click', opts));
+    };
+
+    const start = Date.now();
+    while (Date.now() - start < 8000) {
+      const txt = norm(document.body?.innerText || '');
+      const hasStatus =
+        txt.includes('en verification') ||
+        txt.includes('verifiee automatiquement') ||
+        txt.includes('soumise');
+      const nextBtn = Array.from(document.querySelectorAll('button, a, div')).find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left >= minRightX && (el.innerText || '').length < 40 && norm(el.innerText || '').includes('tache suivante');
+      });
+
+      if (hasStatus || nextBtn) {
+        if (nextBtn) {
+          await sleepInPage(80);
+          simulateRealisticClick(nextBtn);
+        }
+        return { verified: true };
+      }
+      await sleepInPage(150);
+    }
+
+    return { verified: false, reason: 'Pas de confirmation après le clic sur « Confirmer »' };
+  });
+}
+
+async function main() {
+  console.log('================================================================');
+  console.log('🚀 Bot Cloud PR.SOCIAL (Mode Rapide « Confirmer » SANS capture)');
+  console.log('🎯 Compte @samitodyignacegatien (public) | Abonnements IG uniquement');
+  console.log('⏸️ Pause auto 35 min minimum dès que PR.SOCIAL le demande');
+  console.log('================================================================');
+
+  const startTime = Date.now();
+  const state = loadBotState();
+  const cookies = loadSessionCookies();
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage']
+  });
+
+  const context = await browser.newContext({
+    viewport: { width: 1366, height: 820 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+    locale: 'fr-FR'
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  });
+
+  await context.addCookies(cookies);
+
+  const prPage = await context.newPage();
+  await prPage.goto('https://pr.social/tasks', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+  await sleep(3000);
+
+  let emptyRetries = 0;
+
+  while (true) {
+    if ((Date.now() - startTime) / 60000 >= MAX_RUNTIME_MINUTES) {
+      console.log('⏱️ Fin du relais de 5h10. Sauvegarde de l’état pour le relais suivant.');
+      break;
+    }
+
+    const taskResult = await findAndStartNextInstagramSubscriptionTask(prPage, state.ignoredSignatures || []);
+
+    if (taskResult?.retry) continue;
+
+    if (taskResult?.platformPaused) {
+      const waitMins = Math.max(MIN_PAUSE_MINUTES, taskResult.minutes || MIN_PAUSE_MINUTES);
+      console.log(`⏸️ ${taskResult.reason} -> Pause automatique de ${waitMins} minutes en cours. Reprise automatique ensuite !`);
+      await sleep(waitMins * 60 * 1000);
+      console.log(`⚡ Fin des ${waitMins} minutes de pause ! Reprise automatique des tâches...`);
+      await prPage.goto('https://pr.social/tasks', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+      await sleep(3000);
+      continue;
+    }
+
+    if (taskResult?.noTask || !taskResult?.igUrl) {
+      emptyRetries += 1;
+      console.log(`🔍 Aucune tâche visible (${emptyRetries}/6)`);
+      if (emptyRetries === 3) {
+        console.log('🔄 Rechargement complet de la page PR.SOCIAL...');
+        await prPage.reload({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {});
+        await sleep(3000);
+      } else if (emptyRetries >= 6) {
+        console.log('⏳ Liste vide : attente 5 minutes puis nouvelle vérification automatique...');
+        emptyRetries = 0;
+        await sleep(5 * 60 * 1000);
+        await prPage.reload({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {});
+        await sleep(3000);
+      } else {
+        await prPage.mouse.move(600, 450);
+        await prPage.mouse.wheel(0, 500);
+        await sleep(3500);
+      }
+      continue;
+    }
+
+    emptyRetries = 0;
+    console.log(`▶️ Tâche sélectionnée : ${taskResult.title}`);
+
+    await clickStep1OpenProfileBox(context, prPage);
+
+    const igPage = await context.newPage();
+    let followConfirmed = false;
+
+    try {
+      await igPage.goto(taskResult.igUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await sleep(randomBetween(1800, 3200));
+      await moveMouseHumanLike(igPage, randomBetween(450, 780), randomBetween(220, 420));
+      await igPage.mouse.wheel(0, randomBetween(110, 230));
+      await sleep(randomBetween(700, 1200));
+      await igPage.mouse.wheel(0, -randomBetween(90, 170));
+      await sleep(randomBetween(1200, 2200));
+
+      const igOutcome = await igPage.evaluate(async () => {
+        const sleepInPage = (ms) => new Promise((r) => setTimeout(r, ms));
+        const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        const bodyTxt = norm(document.body?.innerText || '');
+
+        if (bodyTxt.includes('try again later') || bodyTxt.includes('reessayez plus tard') || bodyTxt.includes('action bloquee')) {
+          return { status: 'IG_RATE_LIMIT' };
+        }
+        if (bodyTxt.includes("sorry, this page isn't available") || bodyTxt.includes("cette page n'est pas disponible")) {
+          return { status: 'NOT_FOUND' };
+        }
+
+        const followLabels = ['suivre', 'follow', "s'abonner", 'sabonner', 'suivre en retour', 'follow back'];
+        const followingLabels = ['suivi(e)', 'suivi', 'following', 'demande', 'demandé', 'requested', 'abonné'];
+
+        const scope = document.querySelector('header') || document.body;
+        const buttons = Array.from(scope.querySelectorAll('button, [role="button"]'));
+
+        let followBtn = null;
+        let alreadyBtn = null;
+        for (const b of buttons) {
+          const t = norm(b.innerText || b.getAttribute('aria-label') || '');
+          if (followLabels.includes(t) && !followBtn) followBtn = b;
+          if (followingLabels.includes(t) && !alreadyBtn) alreadyBtn = b;
+        }
+
+        if (!followBtn && alreadyBtn) {
+          return { status: 'ALREADY_FOLLOWING' };
+        }
+        if (!followBtn) return { status: 'NOT_FOUND' };
+
+        followBtn.click();
+        const start = Date.now();
+        while (Date.now() - start < 7000) {
+          await sleepInPage(300);
+          const currentButtons = Array.from((document.querySelector('header') || document.body).querySelectorAll('button, [role="button"]'));
+          const confirmed = currentButtons.find((b) => followingLabels.includes(norm(b.innerText || b.getAttribute('aria-label') || '')));
+          if (confirmed) {
+            return { status: 'FOLLOWED' };
+          }
+        }
+        return { status: 'ERROR' };
+      });
+
+      if (igOutcome.status === 'IG_RATE_LIMIT') {
+        console.log('🛡️ BOUCLIER ANTI-BAN : Instagram demande de ralentir -> Pause de 35 minutes puis reprise...');
+        await igPage.close();
+        await sleep(35 * 60 * 1000);
+        continue;
+      }
+
+      if (igOutcome.status === 'FOLLOWED' || igOutcome.status === 'ALREADY_FOLLOWING') {
+        followConfirmed = true;
+      }
+    } catch (err) {
+      console.log(`⚠️ Erreur Instagram (@${taskResult.username}) : ${err.message}`);
+    } finally {
+      if (!igPage.isClosed()) await igPage.close();
+    }
+
+    if (!followConfirmed) {
+      console.log(`🔄 Suivi non confirmé pour @${taskResult.username} -> annulation propre.`);
+      await cancelActiveTaskOnPrSocial(prPage);
+      state.failedCount = (state.failedCount || 0) + 1;
+      state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
+      saveBotState(state);
+      await sleep(randomBetween(2000, 3500));
+      continue;
+    }
+
+    const confirmOutcome = await confirmTaskWithoutScreenshotOnPrSocial(prPage);
+
+    if (confirmOutcome.verified) {
+      state.completedCount = (state.completedCount || 0) + 1;
+      state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
+      saveBotState(state);
+
+      console.log(`✅ Tâche #${state.completedCount} confirmée sans capture (@${taskResult.username})`);
+
+      if (state.completedCount > 0 && state.completedCount % 12 === 0) {
+        const breatherSec = randomBetween(20, 35);
+        console.log(`☕ Micro-pause humaine anti-ban (${breatherSec}s)...`);
+        await sleep(breatherSec * 1000);
+      } else {
+        await sleep(randomBetween(4000, 8000));
+      }
+    } else {
+      console.log(`❌ Échec confirmation (@${taskResult.username}) : ${confirmOutcome.reason}. Annulation et passage à la suivante.`);
+      await cancelActiveTaskOnPrSocial(prPage);
+      state.failedCount = (state.failedCount || 0) + 1;
+      state.ignoredSignatures = [...(state.ignoredSignatures || []), taskResult.signature].slice(-200);
+      saveBotState(state);
+      await sleep(2500);
+    }
+  }
+
+  await browser.close();
+}
+
+main().catch((err) => {
+  console.error('❌ Erreur fatale Bot Cloud :', err);
+  process.exit(1);
+});
