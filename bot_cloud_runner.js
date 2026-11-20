@@ -2,7 +2,7 @@
  * bot_cloud_runner.js — Robot Cloud PR.SOCIAL (Version SANS capture d'écran : bouton "Confirmer")
  * - Filtre strict Abonnements Instagram uniquement
  * - Vérifie que le suivi passe à "Suivi(e)" / "Following" / "Demandé" sur Instagram
- * - Clique directement sur "Confirmer" sur PR.SOCIAL puis sur "Tâche suivante →"
+ * - Attend et clique sur "Confirmer" / "Vérifier" / "Valider" sur PR.SOCIAL puis sur "Tâche suivante →"
  * - Pause automatique de 35 min (ou plus si PR.SOCIAL affiche > 35 min) puis reprise autonome
  */
 
@@ -449,26 +449,49 @@ async function clickStep1OpenProfileBox(context, prPage) {
 
 async function confirmTaskWithoutScreenshotOnPrSocial(prPage) {
   await prPage.bringToFront().catch(() => {});
-  await sleep(300);
+  await sleep(400);
 
-  const confirmCoords = await prPage.evaluate(() => {
-    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-    const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
-    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a')).filter((el) => {
-      const r = el.getBoundingClientRect();
-      if (r.left < minRightX || r.width < 30 || r.height < 20) return false;
-      const t = norm(el.innerText || '');
-      return t === 'confirmer' || t === 'confirm' || t.startsWith('confirmer ');
+  let confirmCoords = null;
+  const waitStart = Date.now();
+  while (Date.now() - waitStart < 3500) {
+    confirmCoords = await prPage.evaluate(() => {
+      const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
+      const keywords = ['confirmer', 'confirm', 'verifier', 'valider', 'terminer', 'verify'];
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div')).filter((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < minRightX || r.width < 40 || r.height < 22 || r.height > 85) return false;
+        const t = norm(el.innerText || '');
+        if (!t || t.length > 45 || t.includes('annuler') || t.includes('suivante')) return false;
+        return keywords.some((kw) => t === kw || t.startsWith(kw + ' ') || t.includes(kw));
+      });
+      candidates.sort((a, b) => {
+        const aBtn = ['BUTTON', 'A'].includes(a.tagName) ? 0 : 1;
+        const bBtn = ['BUTTON', 'A'].includes(b.tagName) ? 0 : 1;
+        if (aBtn !== bBtn) return aBtn - bBtn;
+        return (a.innerText?.length || 99) - (b.innerText?.length || 99);
+      });
+      const best = candidates[0];
+      if (!best) return null;
+      best.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const r = best.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: (best.innerText || '').trim() };
     });
-    candidates.sort((a, b) => (a.innerText?.length || 99) - (b.innerText?.length || 99));
-    const best = candidates[0];
-    if (!best) return null;
-    best.scrollIntoView({ behavior: 'instant', block: 'center' });
-    const r = best.getBoundingClientRect();
-    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: (best.innerText || '').trim() };
-  });
+
+    if (confirmCoords) break;
+    await sleep(250);
+  }
 
   if (!confirmCoords) {
+    const rightBtns = await prPage.evaluate(() => {
+      const minRightX = Math.floor((window.innerWidth || 1366) * 0.55);
+      return Array.from(document.querySelectorAll('button, [role="button"], a'))
+        .filter((el) => el.getBoundingClientRect().left >= minRightX)
+        .map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .slice(0, 8);
+    });
+    console.log(`📋 Boutons visibles à droite : ${JSON.stringify(rightBtns)}`);
     return { verified: false, reason: 'Bouton « Confirmer » introuvable dans le panneau droit' };
   }
 
