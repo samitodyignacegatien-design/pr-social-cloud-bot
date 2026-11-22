@@ -227,7 +227,7 @@ async function findAndStartNextTask(page, ignoredSignatures) {
 
         let rightRaw = getRightText(minX), rightNorm = norm(rightRaw);
         const workerMatch = rightRaw.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
-        const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : 'samitodyignacegatien';
+        const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : (process.env.IG_WORKER_USERNAME || '').toLowerCase();
         const curMatch = rightRaw.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
         const curHandle = curMatch ? curMatch[1].replace(/\.$/, '').toLowerCase() : null;
         const curUrl = curHandle ? `https://www.instagram.com/${curHandle}/` : null;
@@ -368,7 +368,7 @@ async function confirmWithoutScreenshot(prPage) {
 async function main() {
   console.log('================================================================');
   console.log('🚀 Bot Cloud PR.SOCIAL (Mode Ultra-Stable SANS capture)');
-  console.log('🎯 Compte @samitodyignacegatien (public) | Abonnements IG uniquement');
+  console.log('🎯 Compte IG configuré (public) | Abonnements IG uniquement');
   console.log('⏸️ Pause auto 35 min minimum dès que PR.SOCIAL le demande');
   console.log('================================================================');
 
