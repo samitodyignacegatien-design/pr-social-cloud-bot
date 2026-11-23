@@ -137,7 +137,8 @@ async function cancelActiveTaskOnPrSocial(prPage) {
 async function findAndStartNextTask(page, ignoredSignatures) {
   try {
     await ensureOnInstagramTasksTab(page);
-    return await page.evaluate(async ({ ignoredList, forbiddenWords }) => {
+    const workerUsername = (process.env.IG_WORKER_USERNAME || "").toLowerCase();
+    return await page.evaluate(async ({ ignoredList, forbiddenWords, workerUsername }) => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").replace(/\s+/g, ' ').trim();
       const isVis = (el) => {
@@ -227,7 +228,7 @@ async function findAndStartNextTask(page, ignoredSignatures) {
 
         let rightRaw = getRightText(minX), rightNorm = norm(rightRaw);
         const workerMatch = rightRaw.match(/COMPTE\s+@([a-zA-Z0-9_.]{2,35})/i);
-        const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : (process.env.IG_WORKER_USERNAME || '').toLowerCase();
+        const workerHandle = workerMatch ? workerMatch[1].toLowerCase() : (workerUsername || "");
         const curMatch = rightRaw.match(/Abonnement sur Instagram[\s\S]{0,120}?@([a-zA-Z0-9_.]{2,35})/i);
         const curHandle = curMatch ? curMatch[1].replace(/\.$/, '').toLowerCase() : null;
         const curUrl = curHandle ? `https://www.instagram.com/${curHandle}/` : null;
@@ -270,7 +271,7 @@ async function findAndStartNextTask(page, ignoredSignatures) {
         }
       }
       return { noTask: true };
-    }, { ignoredList: ignoredSignatures, forbiddenWords: FORBIDDEN_KEYWORDS });
+    }, { ignoredList: ignoredSignatures, forbiddenWords: FORBIDDEN_KEYWORDS, workerUsername });
   } catch (err) {
     if (/Execution context|navigation|Target closed/i.test(String(err.message))) {
       await page.waitForLoadState('domcontentloaded').catch(() => {});
