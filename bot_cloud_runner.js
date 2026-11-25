@@ -463,35 +463,81 @@ async function main() {
         await igPage.mouse.wheel(0, -rand(90, 160)).catch(() => {});
         await sleep(rand(1000, 2000));
 
-        const igOutcome = await igPage.evaluate(async () => {
-          const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        // Fermer les popups Instagram fréquents (cookies ou avertissement "Ignorer / Dismiss")
+        await igPage.evaluate(() => {
+          const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          const dismissWords = ['autoriser tous les cookies', 'allow all cookies', 'ignorer', 'dismiss', 'plus tard', 'not now'];
+          const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+          const b = btns.find((el) => dismissWords.includes(norm(el.innerText || '')));
+          if (b) b.click();
+        }).catch(() => {});
+        await sleep(600);
+
+        const igUrlNow = igPage.url();
+        if (igUrlNow.includes('/accounts/login') || igUrlNow.includes('/challenge') || igUrlNow.includes('/suspended')) {
+          console.log(`🔑 Instagram bloque ou déconnecte la session (${igUrlNow}). Connecte-toi sur Instagram pour valider l'alerte puis mets à jour SESSION_COOKIES_JSON.`);
+          await igPage.close().catch(() => {});
+          await cancelActiveTaskOnPrSocial(prPage);
+          await sleep(10 * 60 * 1000);
+          continue;
+        }
+
+        const igInspect = await igPage.evaluate(() => {
           const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
           const bodyTxt = norm(document.body?.innerText || '');
-          if (bodyTxt.includes('try again later') || bodyTxt.includes('reessayez plus tard') || bodyTxt.includes('action bloquee')) return { status: 'IG_RATE_LIMIT' };
-          if (bodyTxt.includes("sorry, this page isn't available") || bodyTxt.includes("cette page n'est pas disponible")) return { status: 'NOT_FOUND' };
+          if (bodyTxt.includes('try again later') || bodyTxt.includes('reessayez plus tard') || bodyTxt.includes('action bloquee') || bodyTxt.includes('we restrict certain activity')) {
+            return { status: 'IG_RATE_LIMIT' };
+          }
+          if (bodyTxt.includes("sorry, this page isn't available") || bodyTxt.includes("cette page n'est pas disponible")) {
+            return { status: 'NOT_FOUND', detail: 'Page indisponible' };
+          }
+          if (bodyTxt.includes('log in') && bodyTxt.includes('sign up') && !document.querySelector('a[href*="/direct/"]')) {
+            return { status: 'IG_LOGGED_OUT', detail: 'Non connecté sur Instagram' };
+          }
 
           const followLbls = ['suivre', 'follow', "s'abonner", 'sabonner', 'suivre en retour', 'follow back'];
-          const followingLbls = ['suivi(e)', 'suivi', 'following', 'demande', 'demandé', 'requested', 'abonné'];
+          const followingLbls = ['suivi(e)', 'suivi', 'following', 'demande', 'demandé', 'requested', 'abonné', 'abonne(e)'];
           const buttons = Array.from((document.querySelector('header') || document.body).querySelectorAll('button, [role="button"]'));
 
           let followBtn = null, alreadyBtn = null;
+          const seen = [];
           for (const b of buttons) {
             const t = norm(b.innerText || b.getAttribute('aria-label') || '');
+            if (t && seen.length < 6) seen.push(t);
             if (followLbls.includes(t) && !followBtn) followBtn = b;
             if (followingLbls.includes(t) && !alreadyBtn) alreadyBtn = b;
           }
           if (!followBtn && alreadyBtn) return { status: 'ALREADY_FOLLOWING' };
-          if (!followBtn) return { status: 'NOT_FOUND' };
+          if (!followBtn) return { status: 'NO_FOLLOW_BTN', detail: `Boutons vus: ${JSON.stringify(seen)}` };
 
-          followBtn.click();
-          const t0 = Date.now();
-          while (Date.now() - t0 < 7000) {
-            await wait(300);
-            const cur = Array.from((document.querySelector('header') || document.body).querySelectorAll('button, [role="button"]'));
-            if (cur.some((b) => followingLbls.includes(norm(b.innerText || b.getAttribute('aria-label') || '')))) return { status: 'FOLLOWED' };
-          }
-          return { status: 'ERROR' };
+          followBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+          const r = followBtn.getBoundingClientRect();
+          return { status: 'READY', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
         });
+
+        let igOutcome = igInspect;
+        if (igInspect.status === 'READY') {
+          await moveMouseHumanLike(igPage, igInspect.x, igInspect.y);
+          await igPage.mouse.click(igInspect.x, igInspect.y);
+          igOutcome = await igPage.evaluate(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            const followingLbls = ['suivi(e)', 'suivi', 'following', 'demande', 'demandé', 'requested', 'abonné', 'abonne(e)'];
+            const t0 = Date.now();
+            while (Date.now() - t0 < 7500) {
+              await wait(300);
+              const bodyTxt = norm(document.body?.innerText || '');
+              if (bodyTxt.includes('try again later') || bodyTxt.includes('reessayez plus tard') || bodyTxt.includes('action bloquee')) {
+                return { status: 'IG_RATE_LIMIT' };
+              }
+              const cur = Array.from((document.querySelector('header') || document.body).querySelectorAll('button, [role="button"]'));
+              if (cur.some((b) => followingLbls.includes(norm(b.innerText || b.getAttribute('aria-label') || '')))) {
+                return { status: 'FOLLOWED' };
+              }
+            }
+            return { status: 'CLICK_NOT_CONFIRMED', detail: 'Le bouton Suivre est resté inchangé après le clic' };
+          });
+        }
 
         if (igOutcome.status === 'IG_RATE_LIMIT') {
           console.log('🛡️ BOUCLIER ANTI-BAN : Instagram demande de ralentir -> Pause 35 min...');
@@ -499,7 +545,18 @@ async function main() {
           await sleep(35 * 60 * 1000);
           continue;
         }
-        if (igOutcome.status === 'FOLLOWED' || igOutcome.status === 'ALREADY_FOLLOWING') followConfirmed = true;
+        if (igOutcome.status === 'IG_LOGGED_OUT') {
+          console.log('🔑 Session Instagram déconnectée ! Mets à jour les cookies Instagram dans SESSION_COOKIES_JSON.');
+          await igPage.close().catch(() => {});
+          await cancelActiveTaskOnPrSocial(prPage);
+          await sleep(10 * 60 * 1000);
+          continue;
+        }
+        if (igOutcome.status === 'FOLLOWED' || igOutcome.status === 'ALREADY_FOLLOWING') {
+          followConfirmed = true;
+        } else {
+          console.log(`ℹ️ Détail Instagram (@${taskResult.username}) : ${igOutcome.status} ${igOutcome.detail || ''}`);
+        }
       } catch (err) {
         console.log(`⚠️ Erreur Instagram (@${taskResult.username}) : ${err.message}`);
       } finally {
