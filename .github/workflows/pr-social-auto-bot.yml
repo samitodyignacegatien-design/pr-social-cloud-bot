@@ -1,12 +1,12 @@
-name: PR.SOCIAL Stealth IG Bot (Auto-Reprise 35 min)
+name: PR.SOCIAL Stealth IG Bot (Auto-Reprise 35 min + WARP)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */5 * * *"
+    - cron: '0 */5 * * *'
 
 concurrency:
-  group: pr-social-mono-account-samitodyignacegatien
+  group: pr-social-mono-account
   cancel-in-progress: false
 
 jobs:
@@ -18,36 +18,50 @@ jobs:
       - name: 1. Recuperation du code du Bot Cloud
         uses: actions/checkout@v4
 
-      - name: 2. Installation de Node.js 20
+      - name: 2. Installation de Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '22'
 
       - name: 3. Installation du navigateur Chromium Furtif
         run: |
-          npm install
-          npx playwright install --with-deps chromium
+          npm install playwright
+          npx playwright install chromium
+          npx playwright install-deps chromium
 
-      - name: 4. Restauration du compteur de taches
+      - name: 4. Activation du tunnel gratuit Cloudflare WARP (Proxy SOCKS5)
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp
+          sudo systemctl enable --now warp-svc || true
+          sleep 3
+          warp-cli --accept-tos registration new || true
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+          sleep 4
+          curl -s --proxy socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace/ | grep -E "ip=|warp=" || true
+
+      - name: 5. Restauration du compteur de taches
         uses: actions/cache/restore@v4
         with:
           path: data/bot_state.json
-          key: pr-social-state-${{ github.sha }}
+          key: pr-social-state-${{ github.run_id }}
           restore-keys: |
             pr-social-state-
 
-      - name: 5. Execution autonome du Bot (Pause 35 min + Reprise automatique)
+      - name: 6. Execution autonome du Bot (WARP + Pause 35 min)
         env:
           SESSION_COOKIES_JSON: ${{ secrets.SESSION_COOKIES_JSON }}
+          PROXY_URL: "socks5://127.0.0.1:40000"
           MAX_RUNTIME_MINUTES: "310"
-          IG_WORKER_USERNAME: "samitodyignacegatien"
-          PR_WORKER_USERNAME: "zonatody"
           TZ: "Indian/Antananarivo"
         run: node bot_cloud_runner.js
 
-      - name: 6. Sauvegarde de l'etat pour le prochain relais
+      - name: 7. Sauvegarde de l'etat pour le prochain relais
         if: always()
         uses: actions/cache/save@v4
         with:
           path: data/bot_state.json
-          key: pr-social-state-${{ github.sha }}-${{ github.job }}
+          key: pr-social-state-${{ github.run_id }}
