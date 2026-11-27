@@ -377,10 +377,15 @@ async function main() {
   const state = loadBotState();
   const cookies = loadSessionCookies();
 
-  const browser = await chromium.launch({
+  const launchOptions = {
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage']
-  });
+  };
+  if (process.env.PROXY_URL && process.env.PROXY_URL.trim()) {
+    launchOptions.proxy = { server: process.env.PROXY_URL.trim() };
+    console.log(`🌐 Proxy actif : ${process.env.PROXY_URL.trim()}`);
+  }
+  const browser = await chromium.launch(launchOptions);
 
   const context = await browser.newContext({
     viewport: { width: 1366, height: 820 },
@@ -390,6 +395,14 @@ async function main() {
 
   await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => false }); });
   await context.addCookies(cookies);
+
+  // Échauffement léger de la session Instagram sur l'IP active (évite le saut direct profil)
+  try {
+    const warmIg = await context.newPage();
+    await warmIg.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    await sleep(2500);
+    await warmIg.close().catch(() => {});
+  } catch (_) {}
 
   let prPage = await context.newPage();
   await prPage.goto('https://pr.social/tasks', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
